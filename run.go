@@ -28,6 +28,14 @@ type runner struct {
 // already have a summary are still re-injected.
 var errStop = errors.New("stop generating")
 
+// errAuth also ends generation, without counting against the video: the
+// credentials or project are at fault, and every video would fail alike.
+var errAuth = errors.New("gemini credentials or project rejected")
+
+// maxTransient consecutive transient errors end generation for the run: an
+// outage would otherwise cost a call per video for nothing.
+const maxTransient = 5
+
 func (r *runner) run(ctx context.Context) (runStats, error) {
 	var st runStats
 	videos, err := scan(r.cfg.Roots)
@@ -39,8 +47,12 @@ func (r *runner) run(ctx context.Context) (runStats, error) {
 	if err != nil {
 		return st, err
 	}
-	var changed []string
-	calls := 0
+	var (
+		changed   []string
+		calls     int
+		transient int
+		runErr    error
+	)
 	for _, v := range videos {
 		if ctx.Err() != nil {
 			break
@@ -78,10 +90,17 @@ func (r *runner) run(ctx context.Context) (runStats, error) {
 		case errors.Is(err, errStop):
 			st.Stopped = "quota"
 			continue
+		case errors.Is(err, errAuth):
+			st.Stopped = "auth"
+			runErr = err
+			continue
 		case isTransient(err):
-			// A server-side failure says nothing about the video: retry
-			// tomorrow without counting it against MaxAttempts.
+			// A server-side or network failure says nothing about the video:
+			// retry tomorrow without counting it against MaxAttempts.
 			r.log.Warn("summarize, will retry", "video", v.Name(), "err", err)
+			if transient++; transient >= maxTransient {
+				st.Stopped = "transient errors"
+			}
 			continue
 		case err != nil:
 			st.Failed++
@@ -91,6 +110,7 @@ func (r *runner) run(ctx context.Context) (runStats, error) {
 		case res == "":
 			continue // deferred, e.g. over today's video budget
 		}
+		transient = 0
 		fails.clear(v.Base)
 		st.Summarized++
 		if r.cfg.DryRun {
@@ -98,7 +118,12 @@ func (r *runner) run(ctx context.Context) (runStats, error) {
 			continue
 		}
 		if err := writeAtomic(v.SummaryPath(), []byte(res)); err != nil {
-			return st, err
+			// Likely the disk or permissions, so the next video would fail
+			// too. Stop generating, but still save state and refresh what
+			// already changed.
+			st.Stopped = "write error"
+			runErr = fmt.Errorf("writing summary: %w", err)
+			continue
 		}
 		if c, err := r.inject(v, res); err != nil {
 			r.log.Warn("inject", "video", v.Name(), "err", err)
@@ -118,7 +143,7 @@ func (r *runner) run(ctx context.Context) (runStats, error) {
 			r.log.Warn("jellyfin refresh", "err", err)
 		}
 	}
-	return st, nil
+	return st, runErr
 }
 
 // inject writes the summary into the .nfo plot. A video whose .nfo does not
@@ -154,7 +179,7 @@ func (r *runner) summarize(ctx context.Context, v Video, st *runStats, calls *in
 			r.log.Info("summarized", "video", v.Name(), "source", "video", "prompt_tokens", u.PromptTokens, "latency", u.Latency.Round(time.Second))
 			return s.Markdown(Provenance{Model: r.cfg.Model, Source: "video", Generated: time.Now()}), nil
 		}
-		if errors.Is(err, errStop) || isTransient(err) {
+		if errors.Is(err, errStop) || errors.Is(err, errAuth) || isTransient(err) {
 			return "", err
 		}
 		videoErr = err
@@ -196,6 +221,9 @@ func (r *runner) call(ctx context.Context, calls *int, f func() (Summary, Usage,
 		}
 		*calls++
 		s, u, err := f()
+		if isAuth(err) {
+			return s, u, fmt.Errorf("%w: %w", errAuth, err)
+		}
 		if !isQuota(err) {
 			return s, u, err
 		}

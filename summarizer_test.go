@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -260,5 +262,65 @@ func TestSample(t *testing.T) {
 	got := sample([]string{root}, vs, metas, 5)
 	if len(got) != 5 || folderOf([]string{root}, got[0]) == folderOf([]string{root}, got[1]) {
 		t.Errorf("got %v", got)
+	}
+}
+
+func TestRunAuthStopsWithoutRecording(t *testing.T) {
+	root, _ := newLibrary(t, "aaaaaaaaaaa", "bbbbbbbbbbb")
+	badKey := genai.APIError{Code: 400, Status: "INVALID_ARGUMENT",
+		Details: []map[string]any{{"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "API_KEY_INVALID"}}}
+	f := &fake{videoErr: map[string]error{"aaaaaaaaaaa": badKey, "bbbbbbbbbbb": badKey}}
+	r := testRunner(root, f)
+	st, err := r.run(context.Background())
+	if !errors.Is(err, errAuth) || st.Stopped != "auth" || f.videoCalls != 1 || f.transcriptCalls != 0 || st.Failed != 0 {
+		t.Fatalf("err %v, %+v, fake %+v", err, st, f)
+	}
+	fails, _ := loadFailures(r.cfg.StateDir)
+	if len(fails.Entries) != 0 {
+		t.Errorf("recorded %v", fails.Entries)
+	}
+}
+
+func TestIsAuth(t *testing.T) {
+	private := genai.APIError{Code: 403, Status: "PERMISSION_DENIED", Message: "private"}
+	if isAuth(private) {
+		t.Error("a bare 403 is a private video, not an auth error")
+	}
+	if !isAuth(genai.APIError{Code: 401}) {
+		t.Error("401")
+	}
+}
+
+func TestRunNetworkErrorsAreTransient(t *testing.T) {
+	ids := []string{"aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc", "ddddddddddd", "eeeeeeeeeee", "fffffffffff"}
+	root, _ := newLibrary(t, ids...)
+	down := &url.Error{Op: "Post", URL: "https://x", Err: &net.DNSError{Err: "no such host", IsNotFound: true}}
+	f := &fake{videoErr: map[string]error{}}
+	for _, id := range ids {
+		f.videoErr[id] = down
+	}
+	r := testRunner(root, f)
+	st, err := r.run(context.Background())
+	if err != nil || st.Failed != 0 || st.Stopped != "transient errors" || f.videoCalls != maxTransient || f.transcriptCalls != 0 {
+		t.Fatalf("err %v, %+v, fake %+v", err, st, f)
+	}
+}
+
+func TestRunWriteErrorStopsAndSavesState(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	root, vs := newLibrary(t, "aaaaaaaaaaa", "bbbbbbbbbbb")
+	dir := filepath.Dir(vs[0].Base)
+	os.Chmod(dir, 0o555)
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	f := &fake{}
+	r := testRunner(root, f)
+	st, err := r.run(context.Background())
+	if err == nil || st.Stopped != "write error" || f.videoCalls != 1 {
+		t.Fatalf("err %v, %+v, fake %+v", err, st, f)
+	}
+	if _, err := os.Stat(filepath.Join(r.cfg.StateDir, "failures.json")); err != nil {
+		t.Errorf("failures not saved: %v", err)
 	}
 }

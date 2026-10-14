@@ -31,7 +31,10 @@ type Config struct {
 	MaxURLSeconds int
 	// Spacing between Gemini calls, to stay under the per-minute limit.
 	CallInterval time.Duration
-	MaxAttempts  int
+	// Upper bound on one Gemini call, so a hung request cannot stall the
+	// daemon. A timeout counts as transient, like a 5xx.
+	CallTimeout time.Duration
+	MaxAttempts int
 
 	JellyfinURL    string
 	JellyfinAPIKey string
@@ -71,6 +74,9 @@ func loadConfig() (Config, error) {
 	}
 	if c.CallInterval, err = time.ParseDuration(env("CALL_INTERVAL", "7s")); err != nil {
 		return c, fmt.Errorf("CALL_INTERVAL: %w", err)
+	}
+	if c.CallTimeout, err = time.ParseDuration(env("CALL_TIMEOUT", "10m")); err != nil {
+		return c, fmt.Errorf("CALL_TIMEOUT: %w", err)
 	}
 	if c.RunOnStart, err = envBool("RUN_ON_START", false); err != nil {
 		return c, err
