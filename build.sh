@@ -1,17 +1,62 @@
 #!/usr/bin/env bash
 # Build ghcr.io/setevik/video-summarizer:<version> for the NAS (amd64) and,
-# with --push, publish it. The version is the only argument that matters:
-# the deployment pins it, so bump both together.
+# with --push, publish it. The deployment pins the version, so bump it there
+# after a push.
 #
-#   ./build.sh v0.1.0 [--push]
+#   ./build.sh [--push] [patch|minor|major|vX.Y.Z]
+#
+# The version defaults to the latest vX.Y.Z git tag with its patch bumped. A
+# push also tags HEAD with it and pushes the tag, so each published version
+# names the commit it was built from; that needs a clean working tree.
 set -euo pipefail
 
-version=${1:?usage: build.sh <version> [--push]}
-image=ghcr.io/setevik/video-summarizer:$version
+usage="usage: build.sh [--push] [patch|minor|major|vX.Y.Z]"
+push=false
+bump=patch
+for arg in "$@"; do
+	case $arg in
+	--push) push=true ;;
+	patch | minor | major | v[0-9]*.[0-9]*.[0-9]*) bump=$arg ;;
+	*) echo "$usage" >&2; exit 2 ;;
+	esac
+done
 cd "$(dirname "$0")"
 
+if $push && [[ -n $(git status --porcelain) ]]; then
+	echo "build.sh: uncommitted changes; commit them before pushing" >&2
+	exit 1
+fi
+
+git fetch --quiet --tags origin
+latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+if [[ $bump == v* ]]; then
+	version=$bump
+else
+	IFS=. read -r major minor patch <<<"${latest#v}"
+	major=${major:-0} minor=${minor:-0} patch=${patch:-0}
+	case $bump in
+	major) version=v$((major + 1)).0.0 ;;
+	minor) version=v$major.$((minor + 1)).0 ;;
+	patch) version=v$major.$minor.$((patch + 1)) ;;
+	esac
+fi
+if git rev-parse --quiet --verify "refs/tags/$version" >/dev/null; then
+	echo "build.sh: $version is already tagged" >&2
+	exit 1
+fi
+image=ghcr.io/setevik/video-summarizer:$version
+echo "building $image (latest tag: ${latest:-none})"
+
 go test ./...
-docker build --platform linux/amd64 -t "$image" .
-if [[ ${2:-} == --push ]]; then
+# Podman copies the base image's manifest annotations, including distroless's
+# org.opencontainers.image.source, and GHCR reads that ahead of the Dockerfile
+# LABEL when it links the package to a repository. Set ours explicitly.
+docker build --platform linux/amd64 \
+	--annotation org.opencontainers.image.source=https://github.com/setevik/video-summarizer \
+	-t "$image" .
+if $push; then
 	docker push "$image"
+	git tag "$version"
+	git push --quiet origin "refs/tags/$version"
+	echo "pushed $image; pin $version in the deployment"
 fi
