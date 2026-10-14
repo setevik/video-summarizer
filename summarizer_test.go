@@ -249,6 +249,16 @@ func TestRunQuotaStopsAndBudgetDefers(t *testing.T) {
 	if st.Summarized != 1 || f2.transcriptCalls != 0 {
 		t.Errorf("budget: %+v, fake %+v", st, f2)
 	}
+
+	// A budget smaller than any one video still lets the run's first through.
+	f3 := &fake{}
+	root3, _ := newLibrary(t, "aaaaaaaaaaa", "bbbbbbbbbbb")
+	r = testRunner(root3, f3)
+	r.cfg.VideoSecondsPerRun = 300
+	st, _ = r.run(context.Background())
+	if st.Summarized != 1 || f3.videoCalls != 1 {
+		t.Errorf("long video: %+v, fake %+v", st, f3)
+	}
 }
 
 func TestRunGivesUp(t *testing.T) {

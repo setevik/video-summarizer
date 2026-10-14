@@ -31,7 +31,8 @@ For each video, newest first:
   summary that cannot be written.
 - **Quota:** a 429 is retried once after a minute, then the run stops. A video
   that needs video input but is over the run's video budget waits for the
-  next run.
+  next run. The run's first video always fits, so one longer than the budget
+  still gets its turn.
 
 ## Sources
 

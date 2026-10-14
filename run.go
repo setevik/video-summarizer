@@ -200,9 +200,10 @@ func (r *runner) summarize(ctx context.Context, v Video, st *runStats, calls *in
 			case m.Duration > r.cfg.MaxURLSeconds:
 				why = append(why, "video: longer than MAX_URL_SECONDS")
 				continue
-			case st.VideoSeconds+m.Duration > r.cfg.VideoSecondsPerRun:
+			case st.VideoSeconds > 0 && st.VideoSeconds+m.Duration > r.cfg.VideoSecondsPerRun:
 				// Over today's budget: try again tomorrow rather than settle
-				// for a source already found wanting.
+				// for a source already found wanting. The run's first video
+				// always fits, or one longer than the budget never would.
 				return "", nil
 			}
 			st.VideoSeconds += m.Duration
