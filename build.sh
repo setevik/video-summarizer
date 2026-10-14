@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build ghcr.io/setevik/video-summarizer:<version> for the NAS (amd64) and,
-# with --push, publish it. The deployment pins the version, so bump it there
-# after a push.
+# with --push, publish it and move :latest to it. The deployment pins the
+# version, so bump it there after a push.
 #
 #   ./build.sh [--push] [patch|minor|major|vX.Y.Z]
 #
@@ -44,7 +44,8 @@ if git rev-parse --quiet --verify "refs/tags/$version" >/dev/null; then
 	echo "build.sh: $version is already tagged" >&2
 	exit 1
 fi
-image=ghcr.io/setevik/video-summarizer:$version
+repo=ghcr.io/setevik/video-summarizer
+image=$repo:$version
 echo "building $image (latest tag: ${latest:-none})"
 
 go test ./...
@@ -58,5 +59,11 @@ if $push; then
 	docker push "$image"
 	git tag "$version"
 	git push --quiet origin "refs/tags/$version"
+	# :latest follows the highest version, so an explicit older one (a
+	# backport) does not move it back.
+	if [[ $(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1) == "$version" ]]; then
+		docker tag "$image" "$repo:latest"
+		docker push "$repo:latest"
+	fi
 	echo "pushed $image; pin $version in the deployment"
 fi

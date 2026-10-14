@@ -93,7 +93,8 @@ touches the library.
 ```
 
 The script runs the tests, then builds `ghcr.io/setevik/video-summarizer:<version>`
-for amd64 and pushes it. The version is the latest `vX.Y.Z` git tag with its
+for amd64 and pushes it, moving `:latest` to it unless it is older than an
+existing version. The version is the latest `vX.Y.Z` git tag with its
 patch bumped; pass `minor`, `major` or an explicit `vX.Y.Z` to override. A push
 also tags the commit with the version and pushes the tag, so it needs a clean
 working tree. Pin the printed version in the deployment.
