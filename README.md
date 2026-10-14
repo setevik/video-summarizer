@@ -26,8 +26,11 @@ For each video, newest first:
   original-language `.srt` sidecar (manual or ASR), else a creator-provided
   one. Auto-translated tracks are never sent.
 - **Failures** are counted in `$STATE_DIR/failures.json`. After `MAX_ATTEMPTS`
-  the job stops trying a video; delete its entry to retry. Quota errors and
-  5xx responses don't count.
+  the job stops trying a video; delete its entry to retry. Quota errors, 5xx
+  responses, timeouts and network errors don't count.
+- **Run-wide failures stop generation, not re-injection:** a rejected API key
+  or project (the run exits non-zero), five transient errors in a row, or a
+  summary that cannot be written.
 - **Quota:** a 429 is retried once after a minute, then the run stops. A video
   over the run's video budget waits for the next run. It is never downgraded
   to its transcript just to save budget.
@@ -48,6 +51,7 @@ Environment only.
 | `CALLS_PER_RUN` | `200` | `0` pauses generation; re-injection still runs |
 | `MAX_URL_SECONDS` | `10800` | longer videos go by transcript |
 | `CALL_INTERVAL` | `7s` | spacing between calls |
+| `CALL_TIMEOUT` | `10m` | upper bound on one call; a timeout is retried next run |
 | `MAX_ATTEMPTS` | `3` | |
 | `JELLYFIN_URL`, `JELLYFIN_API_KEY` | — | unset: no refresh, Jellyfin picks changes up on its next scan |
 | `RUN_AT` | `10:30` | daemon's daily run, container `TZ` |

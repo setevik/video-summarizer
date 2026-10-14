@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -29,6 +30,7 @@ type gemini struct {
 	model    string
 	language string
 	thinking genai.ThinkingLevel
+	timeout  time.Duration
 }
 
 // newGemini authenticates from the environment: GEMINI_API_KEY for the
@@ -40,7 +42,7 @@ func newGemini(ctx context.Context, c Config) (*gemini, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &gemini{client: client, model: c.Model, language: c.SummaryLanguage, thinking: genai.ThinkingLevel(strings.ToUpper(c.ThinkingLevel))}, nil
+	return &gemini{client: client, model: c.Model, language: c.SummaryLanguage, thinking: genai.ThinkingLevel(strings.ToUpper(c.ThinkingLevel)), timeout: c.CallTimeout}, nil
 }
 
 var summarySchema = map[string]any{
@@ -96,6 +98,11 @@ func (g *gemini) FromTranscript(ctx context.Context, m Meta, transcript string) 
 }
 
 func (g *gemini) generate(ctx context.Context, parts []*genai.Part, duration int) (Summary, Usage, error) {
+	if g.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, g.timeout)
+		defer cancel()
+	}
 	start := time.Now()
 	resp, err := g.client.Models.GenerateContent(ctx, g.model, []*genai.Content{genai.NewContentFromParts(parts, genai.RoleUser)}, g.config())
 	u := Usage{Latency: time.Since(start)}
@@ -180,10 +187,42 @@ func isQuota(err error) bool {
 	return errors.As(err, &ae) && ae.Code == 429
 }
 
+// isTransient covers server errors, timeouts and network failures: none of
+// them says anything about the video.
 func isTransient(err error) bool {
 	var ae genai.APIError
 	if errors.As(err, &ae) {
 		return ae.Code >= 500
 	}
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+	var ne net.Error
+	return errors.As(err, &ne) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+}
+
+// authReasons are google.rpc.ErrorInfo reasons that mean the credentials or
+// the project, not the video, are at fault. A bare 403 is not enough: Gemini
+// also answers 403 for a private video, which falls back to its transcript.
+var authReasons = map[string]bool{
+	"API_KEY_INVALID": true, "API_KEY_EXPIRED": true, "API_KEY_SERVICE_BLOCKED": true,
+	"API_KEY_HTTP_REFERRER_BLOCKED": true, "API_KEY_IP_ADDRESS_BLOCKED": true,
+	"ACCESS_TOKEN_EXPIRED": true, "ACCESS_TOKEN_SCOPE_INSUFFICIENT": true,
+	"SERVICE_DISABLED": true, "BILLING_DISABLED": true, "CONSUMER_INVALID": true,
+	"CONSUMER_SUSPENDED": true, "IAM_PERMISSION_DENIED": true,
+}
+
+// isAuth reports a credentials or project problem, which would fail every
+// video alike.
+func isAuth(err error) bool {
+	var ae genai.APIError
+	if !errors.As(err, &ae) {
+		return false
+	}
+	if ae.Code == 401 {
+		return true
+	}
+	for _, d := range ae.Details {
+		if r, _ := d["reason"].(string); authReasons[r] {
+			return true
+		}
+	}
+	return false
 }
