@@ -61,11 +61,12 @@ func dispatch(ctx context.Context, log *slog.Logger, cmd string, args []string) 
 		n := fs.Int("n", 15, "videos to sample")
 		models := fs.String("models", cfg.Model, "comma-separated model IDs")
 		modes := fs.String("modes", "video,transcript", "comma-separated: video, transcript")
+		dryRun := fs.Bool("dry-run", false, "print the sample and estimated tokens, call nothing")
 		fs.Parse(args)
 		if fs.NArg() != 1 {
 			return fmt.Errorf("eval: want one OUTDIR")
 		}
-		return runEval(ctx, cfg, splitList(*models), splitList(*modes), *n, fs.Arg(0))
+		return runEval(ctx, cfg, splitList(*models), splitList(*modes), *n, fs.Arg(0), *dryRun)
 	default:
 		return fmt.Errorf("unknown command %q\n%s", cmd, usage)
 	}
