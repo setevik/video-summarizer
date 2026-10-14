@@ -71,7 +71,11 @@ type evalRow struct {
 
 // runEval summarizes a sample with each model and mode into outDir and writes
 // report.md beside the results. It never touches the library.
-func runEval(ctx context.Context, cfg Config, models, modes []string, n int, outDir string) error {
+// Gemini 3 at low media resolution and the default 1 fps: 70 tokens per frame
+// plus 25 per second of audio. Only used to size an eval before it runs.
+const videoTokensPerSecond = 95
+
+func runEval(ctx context.Context, cfg Config, models, modes []string, n int, outDir string, dryRun bool) error {
 	videos, err := scan(cfg.Roots)
 	if err != nil {
 		return err
@@ -84,15 +88,18 @@ func runEval(ctx context.Context, cfg Config, models, modes []string, n int, out
 		}
 		metas[v.Base] = m
 	}
-	if err := os.MkdirAll(outDir, 0o775); err != nil {
-		return err
-	}
 	picked := sample(cfg.Roots, videos, metas, n)
 	total := 0
 	for _, v := range picked {
 		total += metas[v.Base].Duration
 	}
 	fmt.Fprintf(os.Stderr, "eval: %d videos, %s of video, models %v, modes %v\n", len(picked), formatTS(total), models, modes)
+	if dryRun {
+		return planEval(cfg, picked, metas, models, modes)
+	}
+	if err := os.MkdirAll(outDir, 0o775); err != nil {
+		return err
+	}
 
 	var rows []evalRow
 	for _, model := range models {
@@ -109,6 +116,13 @@ func runEval(ctx context.Context, cfg Config, models, modes []string, n int, out
 				var s Summary
 				switch mode {
 				case "video":
+					// Same rule as a run: past the context window, a run
+					// would use the transcript, so there is nothing to test.
+					if m.Duration > cfg.MaxURLSeconds {
+						row.err = "over MAX_URL_SECONDS, a run uses the transcript"
+						rows = append(rows, row)
+						continue
+					}
 					s, row.u, err = g.FromVideo(ctx, m)
 				case "transcript":
 					path, lang := pickTranscript(v, m)
@@ -148,6 +162,42 @@ func runEval(ctx context.Context, cfg Config, models, modes []string, n int, out
 		}
 	}
 	return writeReport(filepath.Join(outDir, "report.md"), rows)
+}
+
+// planEval prints the sample and the input tokens each model would be sent,
+// without calling the model.
+func planEval(cfg Config, picked []Video, metas map[string]Meta, models, modes []string) error {
+	var videoTok, textTok int
+	for _, v := range picked {
+		m := metas[v.Base]
+		route := []string{}
+		for _, mode := range modes {
+			switch mode {
+			case "video":
+				if m.Duration > cfg.MaxURLSeconds {
+					route = append(route, "video:skipped")
+					continue
+				}
+				videoTok += m.Duration * videoTokensPerSecond
+				route = append(route, "video")
+			case "transcript":
+				path, lang := pickTranscript(v, m)
+				if path == "" {
+					route = append(route, "transcript:none")
+					continue
+				}
+				t, err := loadTranscript(path, 600_000)
+				if err != nil {
+					return err
+				}
+				textTok += len(t) / 4 // ~4 characters a token
+				route = append(route, "transcript:"+lang)
+			}
+		}
+		fmt.Printf("%8s  orig=%-3s %-32s %s/%s\n", formatTS(m.Duration), m.Language, strings.Join(route, ","), folderOf(cfg.Roots, v), v.Name())
+	}
+	fmt.Printf("\nper model: ~%d video tokens + ~%d transcript tokens (+ ~1.5k prompt and ~1.5k output per call); %d models\n", videoTok, textTok, len(models))
+	return nil
 }
 
 func writeReport(path string, rows []evalRow) error {
