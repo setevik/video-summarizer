@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -83,13 +84,17 @@ func TestLoadTranscript(t *testing.T) {
 	p := filepath.Join(dir, "v.en.srt")
 	srt := "\ufeff1\n00:00:01,000 --> 00:00:03,000\nhello <i>there</i>\n\n2\n00:00:03,000 --> 00:00:05,000\nhello there\nnext line\n\n3\n00:00:40,000 --> 00:00:42,000\nlater\n\n4\n01:00:02,000 --> 01:00:03,000\nan hour in\n"
 	os.WriteFile(p, []byte(srt), 0o644)
-	got, err := loadTranscript(p, 0)
+	got, st, err := loadTranscript(p, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := "[00:01] hello there next line\n[00:40] later\n[1:00:02] an hour in\n"
 	if got != want {
 		t.Errorf("got\n%q\nwant\n%q", got, want)
+	}
+	// 31 letters: hellothere nextline later anhourin.
+	if st.Words != 6 || st.LastAt != 3602 {
+		t.Errorf("stats %+v", st)
 	}
 }
 
@@ -133,7 +138,7 @@ func TestLoadMetaOrigFromAutoCaptions(t *testing.T) {
 // fake records calls and fails videos whose ID is listed.
 type fake struct {
 	videoCalls, transcriptCalls int
-	videoErr                    map[string]error
+	videoErr, transcriptErr     map[string]error
 }
 
 func (f *fake) FromVideo(_ context.Context, m Meta) (Summary, Usage, error) {
@@ -146,6 +151,9 @@ func (f *fake) FromVideo(_ context.Context, m Meta) (Summary, Usage, error) {
 
 func (f *fake) FromTranscript(_ context.Context, m Meta, t string) (Summary, Usage, error) {
 	f.transcriptCalls++
+	if err := f.transcriptErr[m.ID]; err != nil {
+		return Summary{}, Usage{}, err
+	}
 	return Summary{Overview: "Transcript summary of " + m.ID}, Usage{}, nil
 }
 
@@ -159,15 +167,34 @@ func newLibrary(t *testing.T, ids ...string) (string, []Video) {
 		os.WriteFile(base+".mp4", nil, 0o644)
 		os.WriteFile(base+".nfo", []byte(ytdlNFO), 0o644)
 		os.WriteFile(base+".info.json", []byte(`{"id":"`+id+`","duration":600,"language":"en","automatic_captions":{"en":[]}}`), 0o644)
-		os.WriteFile(base+".en.srt", []byte("1\n00:00:01,000 --> 00:00:02,000\nhi\n"), 0o644)
+		os.WriteFile(base+".en.srt", []byte(speechSRT(600, 600)), 0o644)
 		vs = append(vs, Video{Path: base + ".mp4", Base: base})
 	}
 	return root, vs
 }
 
+// speechSRT is a transcript with a cue of ordinary speech every 30 s up to
+// until, for a video of the given length: about 30 words/min.
+func speechSRT(duration, until int) string {
+	var b strings.Builder
+	for i, at := 1, 0; at < until && at < duration; i, at = i+1, at+30 {
+		// Numbered: the loader drops a line identical to the one before it.
+		fmt.Fprintf(&b, "%d\n%s --> %s\nsentence %d is ordinary speech, long enough to count as words\n\n",
+			i, srtTS(at), srtTS(at+2), i)
+	}
+	return b.String()
+}
+
+func srtTS(sec int) string {
+	return fmt.Sprintf("%02d:%02d:%02d,000", sec/3600, sec/60%60, sec%60)
+}
+
+// testRunner prefers video, so the run-loop tests below exercise the video
+// path and its error handling; the transcript-first tests set it themselves.
 func testRunner(root string, f Summarizer) *runner {
 	cfg := Config{Roots: []string{root}, StateDir: filepath.Join(root, ".state"), Model: "m",
-		VideoSecondsPerRun: 27000, CallsPerRun: 100, MaxURLSeconds: 10800, MaxAttempts: 2}
+		VideoSecondsPerRun: 27000, CallsPerRun: 100, MaxURLSeconds: 10800, MaxAttempts: 2,
+		PreferSource: "video", MinTranscriptWPM: 10, MinTranscriptCoverage: 0.5}
 	return &runner{cfg: cfg, sum: f, log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		sleep: func(context.Context, time.Duration) error { return nil }}
 }
@@ -222,6 +249,16 @@ func TestRunQuotaStopsAndBudgetDefers(t *testing.T) {
 	if st.Summarized != 1 || f2.transcriptCalls != 0 {
 		t.Errorf("budget: %+v, fake %+v", st, f2)
 	}
+
+	// A budget smaller than any one video still lets the run's first through.
+	f3 := &fake{}
+	root3, _ := newLibrary(t, "aaaaaaaaaaa", "bbbbbbbbbbb")
+	r = testRunner(root3, f3)
+	r.cfg.VideoSecondsPerRun = 300
+	st, _ = r.run(context.Background())
+	if st.Summarized != 1 || f3.videoCalls != 1 {
+		t.Errorf("long video: %+v, fake %+v", st, f3)
+	}
 }
 
 func TestRunGivesUp(t *testing.T) {
@@ -234,6 +271,65 @@ func TestRunGivesUp(t *testing.T) {
 	}
 	if f.videoCalls != 2 { // MaxAttempts
 		t.Errorf("calls %d", f.videoCalls)
+	}
+
+	// A subtitle appears (a backfill): the video is tried again, and the
+	// new transcript carries it.
+	os.WriteFile(vs[0].Base+".en.srt", []byte(speechSRT(600, 600)), 0o644)
+	st, _ := r.run(context.Background())
+	if st.Summarized != 1 || f.transcriptCalls != 1 {
+		t.Errorf("after backfill: %+v, fake %+v", st, f)
+	}
+}
+
+func TestRunTranscriptFirst(t *testing.T) {
+	root, vs := newLibrary(t, "aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc", "ddddddddddd")
+	os.WriteFile(vs[1].Base+".en.srt", []byte("1\n00:00:01,000 --> 00:00:02,000\n[Music]\n\n2\n00:00:05,000 --> 00:00:06,000\nhi\n"), 0o644)
+	os.WriteFile(vs[2].Base+".en.srt", []byte(speechSRT(600, 120)), 0o644) // stops at 1:30 of 10:00
+	os.Remove(vs[3].Base + ".en.srt")
+	f := &fake{}
+	r := testRunner(root, f)
+	r.cfg.PreferSource = "transcript"
+	st, err := r.run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Summarized != 4 || f.transcriptCalls != 1 || f.videoCalls != 3 || st.FromTranscript != 1 {
+		t.Fatalf("%+v, fake %+v", st, f)
+	}
+	for i, want := range []string{"transcript:en", "video", "video", "video"} {
+		md, _ := os.ReadFile(vs[i].SummaryPath())
+		if !strings.Contains(string(md), "source: "+want+"\n") {
+			t.Errorf("video %d: want %s, got\n%s", i, want, md)
+		}
+	}
+}
+
+func TestRunTranscriptErrorFallsBackToVideo(t *testing.T) {
+	root, vs := newLibrary(t, "aaaaaaaaaaa")
+	f := &fake{transcriptErr: map[string]error{"aaaaaaaaaaa": errors.New("decoding model output")}}
+	r := testRunner(root, f)
+	r.cfg.PreferSource = "transcript"
+	st, _ := r.run(context.Background())
+	md, _ := os.ReadFile(vs[0].SummaryPath())
+	if st.Summarized != 1 || f.transcriptCalls != 1 || f.videoCalls != 1 || !strings.Contains(string(md), "source: video\n") {
+		t.Errorf("%+v, fake %+v\n%s", st, f, md)
+	}
+}
+
+func TestRunNoUsableSourceRecordsWhy(t *testing.T) {
+	root, vs := newLibrary(t, "aaaaaaaaaaa")
+	os.WriteFile(vs[0].Base+".info.json", []byte(`{"id":"aaaaaaaaaaa","duration":20000,"language":"en","automatic_captions":{"en":[]}}`), 0o644)
+	os.Remove(vs[0].Base + ".en.srt")
+	f := &fake{}
+	r := testRunner(root, f)
+	r.cfg.PreferSource = "transcript"
+	st, _ := r.run(context.Background())
+	fails, _ := loadFailures(r.cfg.StateDir)
+	e := fails.Entries[vs[0].Base]
+	if st.Failed != 1 || f.videoCalls+f.transcriptCalls != 0 ||
+		!strings.Contains(e.Error, "transcript: no original-language transcript") || !strings.Contains(e.Error, "video: longer than MAX_URL_SECONDS") {
+		t.Errorf("%+v, fake %+v, entry %+v", st, f, e)
 	}
 }
 

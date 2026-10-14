@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // Sidecar order when nothing says which track is original: the order of the
@@ -57,16 +58,30 @@ func pickTranscript(v Video, m Meta) (path, lang string) {
 var (
 	srtTime = regexp.MustCompile(`^(\d+):(\d{2}):(\d{2})[,.]\d+\s+-->`)
 	srtTag  = regexp.MustCompile(`<[^>]*>|\{\\[^}]*\}`)
+	// Sound cues ("[Music]", "[Applause]", "(laughs)") carry no speech.
+	srtCue = regexp.MustCompile(`\[[^\]]*\]|\([^)]*\)`)
 )
+
+// transcriptStats measures how much speech a transcript holds, so a track
+// that is empty, mostly "[Music]", or stops partway can be told apart from a
+// real one.
+type transcriptStats struct {
+	// Words in "word-equivalents": letters / 5. Language-neutral, so Russian
+	// and Hebrew measure like English, and so would a script without spaces.
+	Words int
+	// Start of the last caption with speech, in seconds.
+	LastAt int
+}
 
 // loadTranscript renders an .srt as "[MM:SS] text" lines, one per ~30 s of
 // speech. Cue-level granularity wastes tokens on timestamps, and YouTube's
 // roll-up ASR captions repeat each line two or three times, so repeats are
 // dropped.
-func loadTranscript(path string, maxChars int) (string, error) {
+func loadTranscript(path string, maxChars int) (string, transcriptStats, error) {
+	var st transcriptStats
 	f, err := os.Open(path)
 	if err != nil {
-		return "", err
+		return "", st, err
 	}
 	defer f.Close()
 
@@ -76,6 +91,7 @@ func loadTranscript(path string, maxChars int) (string, error) {
 		chunkAt = -1
 		cueAt   int
 		last    string
+		letters int
 	)
 	flush := func() {
 		if len(chunk) > 0 {
@@ -105,6 +121,10 @@ func loadTranscript(path string, maxChars int) (string, error) {
 			continue
 		}
 		last = line
+		if n := countLetters(srtCue.ReplaceAllString(line, "")); n > 0 {
+			letters += n
+			st.LastAt = cueAt
+		}
 		if chunkAt < 0 {
 			chunkAt = cueAt
 		}
@@ -112,13 +132,24 @@ func loadTranscript(path string, maxChars int) (string, error) {
 	}
 	flush()
 	if err := sc.Err(); err != nil {
-		return "", err
+		return "", st, err
 	}
+	st.Words = letters / 5
 	s := out.String()
 	if maxChars > 0 && len(s) > maxChars {
 		s = truncate(s, maxChars) + "\n[transcript truncated]\n"
 	}
-	return s, nil
+	return s, st, nil
+}
+
+func countLetters(s string) int {
+	n := 0
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			n++
+		}
+	}
+	return n
 }
 
 func isDigits(s string) bool {
@@ -154,4 +185,58 @@ func parseTS(s string) (int, bool) {
 		total = total*60 + n
 	}
 	return total, true
+}
+
+// transcriptCheck is the transcript a video would be summarized from, and
+// why it cannot be, if it cannot.
+type transcriptCheck struct {
+	Path, Lang, Text string
+	Stats            transcriptStats
+	// "" when usable; otherwise a short reason for the log.
+	Problem string
+}
+
+// Short videos are exempt from the coverage check: a one-minute sketch whose
+// last line is at 0:40 has not stopped early.
+const coverageMinSeconds = 120
+
+func checkTranscript(cfg Config, v Video, m Meta) transcriptCheck {
+	var c transcriptCheck
+	c.Path, c.Lang = pickTranscript(v, m)
+	if c.Path == "" {
+		c.Problem = "no original-language transcript"
+		return c
+	}
+	// ~4 characters a token; 600k characters stays well inside the window.
+	text, st, err := loadTranscript(c.Path, 600_000)
+	if err != nil {
+		c.Problem = "unreadable: " + err.Error()
+		return c
+	}
+	c.Text, c.Stats = text, st
+	switch {
+	case st.Words == 0:
+		c.Problem = "no speech"
+	case m.Duration == 0:
+		// Nothing to measure against; a transcript with speech is usable.
+	case c.WPM(m.Duration) < cfg.MinTranscriptWPM:
+		c.Problem = fmt.Sprintf("sparse: %.0f words/min", c.WPM(m.Duration))
+	case m.Duration >= coverageMinSeconds && c.Coverage(m.Duration) < cfg.MinTranscriptCoverage:
+		c.Problem = fmt.Sprintf("stops at %s of %s", formatTS(st.LastAt), formatTS(m.Duration))
+	}
+	return c
+}
+
+func (c transcriptCheck) WPM(duration int) float64 {
+	if duration <= 0 {
+		return 0
+	}
+	return float64(c.Stats.Words) / (float64(duration) / 60)
+}
+
+func (c transcriptCheck) Coverage(duration int) float64 {
+	if duration <= 0 {
+		return 0
+	}
+	return float64(c.Stats.LastAt) / float64(duration)
 }

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -76,7 +77,8 @@ func (r *runner) run(ctx context.Context) (runStats, error) {
 		if st.Stopped != "" {
 			continue
 		}
-		if f := fails.Entries[v.Base]; f.Count >= r.cfg.MaxAttempts {
+		sidecars := sidecarSignature(v)
+		if fails.givenUp(v.Base, sidecars, r.cfg.MaxAttempts) {
 			st.GivenUp++
 			continue
 		}
@@ -104,7 +106,7 @@ func (r *runner) run(ctx context.Context) (runStats, error) {
 			continue
 		case err != nil:
 			st.Failed++
-			fails.record(v.Base, err)
+			fails.record(v.Base, sidecars, err)
 			r.log.Warn("summarize", "video", v.Name(), "err", err)
 			continue
 		case res == "":
@@ -156,55 +158,73 @@ func (r *runner) inject(v Video, md string) (bool, error) {
 }
 
 // summarize returns the rendered .summary.md, "" to defer the video to a later
-// run, or an error. Video input is the default; the transcript is the
-// fallback for a video Gemini cannot fetch, and the only route for one longer
-// than the context window allows.
+// run, or an error. Sources are tried in PREFER_SOURCE order:
+//
+//   - transcript: the original-language .srt, if checkTranscript passes it;
+//   - video: the YouTube URL, if there is one, it is no longer than
+//     MAX_URL_SECONDS, and today's video budget has room.
+//
+// A source that is unavailable or fails with an error about the video moves
+// on to the other one. Quota, auth and transient errors end the attempt
+// instead: they say nothing about the video.
 func (r *runner) summarize(ctx context.Context, v Video, st *runStats, calls *int) (string, error) {
 	m, err := loadMeta(v)
 	if err != nil {
 		return "", fmt.Errorf("metadata: %w", err)
 	}
-	tooLong := m.Duration > r.cfg.MaxURLSeconds
-	var videoErr error
-	if m.URL != "" && !tooLong {
-		if st.VideoSeconds+m.Duration > r.cfg.VideoSecondsPerRun {
-			// Do not fall back to the transcript just to save budget: the
-			// video gives the better summary, and tomorrow is soon enough.
-			return "", nil
+	tc := checkTranscript(r.cfg, v, m)
+	order := []string{"transcript", "video"}
+	if r.cfg.PreferSource == "video" {
+		order = []string{"video", "transcript"}
+	}
+	var why []string // why each source was passed over, for the log or the error
+	for _, src := range order {
+		var (
+			s   Summary
+			u   Usage
+			err error
+		)
+		switch src {
+		case "transcript":
+			if tc.Problem != "" {
+				why = append(why, "transcript: "+tc.Problem)
+				continue
+			}
+			s, u, err = r.call(ctx, calls, func() (Summary, Usage, error) { return r.sum.FromTranscript(ctx, m, tc.Text) })
+			src = "transcript:" + tc.Lang
+		case "video":
+			switch {
+			case m.URL == "":
+				why = append(why, "video: no URL")
+				continue
+			case m.Duration > r.cfg.MaxURLSeconds:
+				why = append(why, "video: longer than MAX_URL_SECONDS")
+				continue
+			case st.VideoSeconds > 0 && st.VideoSeconds+m.Duration > r.cfg.VideoSecondsPerRun:
+				// Over today's budget: try again tomorrow rather than settle
+				// for a source already found wanting. The run's first video
+				// always fits, or one longer than the budget never would.
+				return "", nil
+			}
+			st.VideoSeconds += m.Duration
+			s, u, err = r.call(ctx, calls, func() (Summary, Usage, error) { return r.sum.FromVideo(ctx, m) })
 		}
-		st.VideoSeconds += m.Duration
-		s, u, err := r.call(ctx, calls, func() (Summary, Usage, error) { return r.sum.FromVideo(ctx, m) })
 		r.account(st, u)
-		if err == nil {
-			r.log.Info("summarized", "video", v.Name(), "source", "video", "prompt_tokens", u.PromptTokens, "latency", u.Latency.Round(time.Second))
-			return s.Markdown(Provenance{Model: r.cfg.Model, Source: "video", Generated: time.Now()}), nil
+		if err != nil {
+			if errors.Is(err, errStop) || errors.Is(err, errAuth) || isTransient(err) {
+				return "", err
+			}
+			why = append(why, src+": "+err.Error())
+			continue
 		}
-		if errors.Is(err, errStop) || errors.Is(err, errAuth) || isTransient(err) {
-			return "", err
+		if src != "video" {
+			st.FromTranscript++
 		}
-		videoErr = err
+		r.log.Info("summarized", "video", v.Name(), "source", src, "passed_over", strings.Join(why, "; "),
+			"prompt_tokens", u.PromptTokens, "latency", u.Latency.Round(time.Second))
+		return s.Markdown(Provenance{Model: r.cfg.Model, Source: src, Generated: time.Now()}), nil
 	}
-
-	path, lang := pickTranscript(v, m)
-	if path == "" {
-		if videoErr != nil {
-			return "", fmt.Errorf("video: %w; no usable transcript", videoErr)
-		}
-		return "", errors.New("no URL and no usable transcript")
-	}
-	// ~4 characters a token; 600k characters stays well inside the window.
-	t, err := loadTranscript(path, 600_000)
-	if err != nil {
-		return "", err
-	}
-	s, u, err := r.call(ctx, calls, func() (Summary, Usage, error) { return r.sum.FromTranscript(ctx, m, t) })
-	r.account(st, u)
-	if err != nil {
-		return "", err
-	}
-	st.FromTranscript++
-	r.log.Info("summarized", "video", v.Name(), "source", "transcript:"+lang, "video_err", errString(videoErr), "prompt_tokens", u.PromptTokens)
-	return s.Markdown(Provenance{Model: r.cfg.Model, Source: "transcript:" + lang, Generated: time.Now()}), nil
+	return "", errors.New(strings.Join(why, "; "))
 }
 
 // call spaces requests out and retries a 429 once after a minute, which is
@@ -240,13 +260,6 @@ func (r *runner) call(ctx context.Context, calls *int, f func() (Summary, Usage,
 func (r *runner) account(st *runStats, u Usage) {
 	st.PromptTokens += u.PromptTokens
 	st.OutputTokens += u.OutputTokens + u.ThoughtTokens
-}
-
-func errString(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {

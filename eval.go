@@ -125,17 +125,14 @@ func runEval(ctx context.Context, cfg Config, models, modes []string, n int, out
 					}
 					s, row.u, err = g.FromVideo(ctx, m)
 				case "transcript":
-					path, lang := pickTranscript(v, m)
-					if path == "" {
-						row.err = "no usable transcript"
+					tc := checkTranscript(cfg, v, m)
+					if tc.Problem != "" {
+						row.err = "transcript: " + tc.Problem
 						rows = append(rows, row)
 						continue
 					}
-					row.mode += ":" + lang
-					var t string
-					if t, err = loadTranscript(path, 600_000); err == nil {
-						s, row.u, err = g.FromTranscript(ctx, m, t)
-					}
+					row.mode += ":" + tc.Lang
+					s, row.u, err = g.FromTranscript(ctx, m, tc.Text)
 				default:
 					return fmt.Errorf("unknown mode %q", mode)
 				}
@@ -181,17 +178,13 @@ func planEval(cfg Config, picked []Video, metas map[string]Meta, models, modes [
 				videoTok += m.Duration * videoTokensPerSecond
 				route = append(route, "video")
 			case "transcript":
-				path, lang := pickTranscript(v, m)
-				if path == "" {
+				tc := checkTranscript(cfg, v, m)
+				if tc.Problem != "" {
 					route = append(route, "transcript:none")
 					continue
 				}
-				t, err := loadTranscript(path, 600_000)
-				if err != nil {
-					return err
-				}
-				textTok += len(t) / 4 // ~4 characters a token
-				route = append(route, "transcript:"+lang)
+				textTok += len(tc.Text) / 4 // ~4 characters a token
+				route = append(route, "transcript:"+tc.Lang)
 			}
 		}
 		fmt.Printf("%8s  orig=%-3s %-32s %s/%s\n", formatTS(m.Duration), m.Language, strings.Join(route, ","), folderOf(cfg.Roots, v), v.Name())
@@ -215,14 +208,15 @@ func writeReport(path string, rows []evalRow) error {
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
-// runPlan prints what a run would do for each unsummarized video, and the
-// backlog it adds up to, without calling the model.
+// runPlan prints, for each video without a summary, the source a run would
+// use and its transcript's measurements, then the backlog this adds up to.
+// It reads files only and calls nothing.
 func runPlan(cfg Config) error {
 	videos, err := scan(cfg.Roots)
 	if err != nil {
 		return err
 	}
-	var pending, seconds, viaTranscript, noFallback int
+	var pending, videoSec, textTok, viaTranscript, viaVideo, none int
 	for _, v := range videos {
 		if _, err := os.Stat(v.SummaryPath()); err == nil {
 			continue
@@ -232,25 +226,33 @@ func runPlan(cfg Config) error {
 			return fmt.Errorf("%s: %w", v.Name(), err)
 		}
 		pending++
-		source := "video"
-		if m.URL == "" || m.Duration > cfg.MaxURLSeconds {
-			source = "transcript"
+		tc := checkTranscript(cfg, v, m)
+		videoOK := m.URL != "" && m.Duration <= cfg.MaxURLSeconds
+		var route string
+		switch {
+		case tc.Problem == "" && (cfg.PreferSource == "transcript" || !videoOK):
+			route = "transcript:" + tc.Lang
 			viaTranscript++
-		} else {
-			seconds += m.Duration
+			textTok += len(tc.Text) / 4
+		case videoOK:
+			route = "video"
+			viaVideo++
+			videoSec += m.Duration
+		default:
+			route = "none"
+			none++
 		}
-		_, lang := pickTranscript(v, m)
-		if lang == "" {
-			lang = "-"
-			noFallback++
+		stats := "-"
+		if tc.Path != "" {
+			stats = fmt.Sprintf("%.0fwpm %.0f%%", tc.WPM(m.Duration), 100*tc.Coverage(m.Duration))
 		}
-		fmt.Printf("%-10s %8s  orig=%-3s fallback=%-3s  %s\n", source, formatTS(m.Duration), m.Language, lang, folderOf(cfg.Roots, v)+"/"+v.Name())
+		fmt.Printf("%-14s %8s  %-12s %-34s %s/%s\n", route, formatTS(m.Duration), stats, tc.Problem, folderOf(cfg.Roots, v), v.Name())
 	}
 	days := 0
 	if cfg.VideoSecondsPerRun > 0 {
-		days = (seconds + cfg.VideoSecondsPerRun - 1) / cfg.VideoSecondsPerRun
+		days = (videoSec + cfg.VideoSecondsPerRun - 1) / cfg.VideoSecondsPerRun
 	}
-	fmt.Printf("\n%d pending: %s of video input (%d daily runs at VIDEO_SECONDS_PER_RUN=%d), %d by transcript, %d with no transcript fallback\n",
-		pending, formatTS(seconds), days, cfg.VideoSecondsPerRun, viaTranscript, noFallback)
+	fmt.Printf("\n%d pending (PREFER_SOURCE=%s): %d by transcript (~%d tokens), %d by video (%s, ~%d tokens, %d daily runs at VIDEO_SECONDS_PER_RUN=%d), %d with no usable source\n",
+		pending, cfg.PreferSource, viaTranscript, textTok, viaVideo, formatTS(videoSec), videoSec*videoTokensPerSecond, days, cfg.VideoSecondsPerRun, none)
 	return nil
 }

@@ -36,6 +36,23 @@ type Config struct {
 	CallTimeout time.Duration
 	MaxAttempts int
 
+	// "transcript": summarize from the original-language .srt when it passes
+	// the checks below, and send the video only when it does not. "video":
+	// the reverse. Transcripts cost ~1/25 of video at low media resolution
+	// and summarize speech-led content about as well; video adds what is
+	// only on screen.
+	PreferSource string
+	// A transcript below either bound is treated as unusable: too little
+	// speech for its length (empty, mostly "[Music]", or a stub track), or
+	// captions that stop early. Words are letters / 5.
+	//
+	// Calibrated on the 769-video YouTube library: speech-led videos run
+	// 40-250 words/min and a sung musical 21, while animation montages and
+	// visual-gag sketches sit at 0-8. Every long video's captions reach
+	// 95-100% of its length.
+	MinTranscriptWPM      float64
+	MinTranscriptCoverage float64
+
 	JellyfinURL    string
 	JellyfinAPIKey string
 
@@ -71,6 +88,16 @@ func loadConfig() (Config, error) {
 		if *i.dst, err = envInt(i.name, i.def); err != nil {
 			return c, err
 		}
+	}
+	c.PreferSource = env("PREFER_SOURCE", "transcript")
+	if c.PreferSource != "transcript" && c.PreferSource != "video" {
+		return c, fmt.Errorf("PREFER_SOURCE %q: want transcript or video", c.PreferSource)
+	}
+	if c.MinTranscriptWPM, err = envFloat("MIN_TRANSCRIPT_WPM", 10); err != nil {
+		return c, err
+	}
+	if c.MinTranscriptCoverage, err = envFloat("MIN_TRANSCRIPT_COVERAGE", 0.5); err != nil {
+		return c, err
 	}
 	if c.CallInterval, err = time.ParseDuration(env("CALL_INTERVAL", "7s")); err != nil {
 		return c, fmt.Errorf("CALL_INTERVAL: %w", err)
@@ -110,6 +137,18 @@ func envInt(name string, def int) (int, error) {
 		return 0, fmt.Errorf("%s: %w", name, err)
 	}
 	return n, nil
+}
+
+func envFloat(name string, def float64) (float64, error) {
+	v := env(name, "")
+	if v == "" {
+		return def, nil
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", name, err)
+	}
+	return f, nil
 }
 
 func envBool(name string, def bool) (bool, error) {
