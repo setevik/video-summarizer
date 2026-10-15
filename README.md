@@ -10,9 +10,9 @@ a separate daily job that scans the library, not as a download hook.
 For each video, newest first:
 
 1. **No `<video>.summary.md`:** summarize it (see [Sources](#sources)), with
-   the title and description as context, and write `<video>.summary.md`. Then
-   prepend the summary to the `.nfo` `<plot>`, above a
-   `──── YouTube description ────` line with the original plot below it.
+   the title, description and creator chapters as context, and write
+   `<video>.summary.md`. Then put the summary at the top of the `.nfo`
+   `<plot>`, with the original plot below it (see [Plot layout](#plot-layout)).
 2. **`.summary.md` exists:** re-inject it if the `.nfo` lacks it (ytdl-sub
    regenerated the file) or if it differs (the summary was edited). No API call.
 3. Ask Jellyfin to refresh every item whose `.nfo` changed.
@@ -38,6 +38,33 @@ For each video, newest first:
   that needs video input but is over the run's video budget waits for the
   next run. The run's first video always fits, so one longer than the budget
   still gets its turn.
+
+## Prompt context
+
+- **Description:** sent as context. The model is told viewers see it right
+  below the summary, so it shouldn't restate it.
+- **Creator chapters** (from `.info.json`): key points follow them and use
+  their exact start times. Intro, sponsor and outro chapters are skipped.
+  Without chapters, the model places timestamps itself.
+
+## Plot layout
+
+`PLOT_FORMAT` sets how the summary and the original plot share the `.nfo`
+`<plot>`. Switching re-injects every `.nfo` once, with no API calls.
+
+- **`text`** (default): plain text, `•` bullets, then a
+  `──── YouTube description ────` line and the original plot. Reads the same
+  in every client.
+- **`markdown`:** jellyfin-web renders the overview as Markdown (markdown-it
+  with HTML, then DOMPurify), and so do the apps built on it (Android, iOS,
+  desktop). The plot is the summary paragraph, a `#### Key points` list, and
+  the original description folded in a `<details>` block, all on one line
+  with `<br>` breaks, so Markdown can't reflow it. An invisible
+  `<!-- video-summarizer -->` comment marks the plot as injected. Native
+  clients (Android TV, Swiftfin, Kodi) show the raw markup.
+
+The summary opens with its paragraph, not a heading, because season episode
+lists render the overview too.
 
 ## Sources
 
@@ -84,6 +111,7 @@ Environment only.
 | `THINKING_LEVEL` | `LOW` | |
 | `VIDEO_SECONDS_PER_RUN` | `27000` | URL input budget; the free tier allows 8 h/day |
 | `CALLS_PER_RUN` | `200` | `0` pauses generation; re-injection still runs |
+| `PLOT_FORMAT` | `text` | `text` for any client, `markdown` for jellyfin-web and the apps built on it (see below) |
 | `SKIP_SHORTS` | `false` | leave YouTube Shorts unsummarized (see below) |
 | `PREFER_SOURCE` | `transcript` | `transcript` or `video`: which source to try first |
 | `MIN_TRANSCRIPT_WPM` | `10` | below this, a transcript is not used |

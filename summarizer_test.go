@@ -30,7 +30,7 @@ Part 2: https://youtu.be/ZA4JkHKZM50 &amp; more</plot>
 `
 
 func TestWithPlotPrependsAndIsIdempotent(t *testing.T) {
-	once, err := withPlot(ytdlNFO, "Overview <b>.\n\nKey points:\n• 00:10 x")
+	once, err := withPlot(ytdlNFO, "Overview <b>.\n\nKey points:\n• 00:10 x", "text")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,12 +43,12 @@ func TestWithPlotPrependsAndIsIdempotent(t *testing.T) {
 			t.Errorf("missing %q in\n%s", want, once)
 		}
 	}
-	twice, _ := withPlot(once, "Overview <b>.\n\nKey points:\n• 00:10 x")
+	twice, _ := withPlot(once, "Overview <b>.\n\nKey points:\n• 00:10 x", "text")
 	if twice != once {
 		t.Errorf("second injection changed the file:\n%s", twice)
 	}
 	// An edited summary replaces the old one instead of stacking.
-	edited, _ := withPlot(once, "New.")
+	edited, _ := withPlot(once, "New.", "text")
 	if strings.Count(edited, plotMarker) != 1 || !strings.HasPrefix(strings.SplitN(edited, "<plot>", 2)[1], "New.\n\n"+plotMarker+"\nhttps://") {
 		t.Errorf("edit not applied cleanly:\n%s", edited)
 	}
@@ -56,11 +56,11 @@ func TestWithPlotPrependsAndIsIdempotent(t *testing.T) {
 
 func TestWithPlotMissingOrEmpty(t *testing.T) {
 	noPlot := "<episodedetails>\n  <title>t</title>\n</episodedetails>\n"
-	got, err := withPlot(noPlot, "S")
+	got, err := withPlot(noPlot, "S", "text")
 	if err != nil || !strings.Contains(got, "<plot>S\n\n"+plotMarker+"</plot>\n</episodedetails>") {
 		t.Errorf("got %q, %v", got, err)
 	}
-	got, _ = withPlot("<e><plot/></e>", "S")
+	got, _ = withPlot("<e><plot/></e>", "S", "text")
 	if got != "<e><plot>S\n\n"+plotMarker+"</plot></e>" {
 		t.Errorf("got %q", got)
 	}
@@ -445,5 +445,84 @@ func TestRunSkipsShorts(t *testing.T) {
 	fails, _ := loadFailures(r.cfg.StateDir)
 	if len(fails.Entries) != 0 {
 		t.Errorf("skips recorded as failures: %v", fails.Entries)
+	}
+}
+
+func TestWithPlotMarkdown(t *testing.T) {
+	original := "https://www.youtube.com/watch?v=8idr1WZ1A7Q\n\n#hashtag line\na <br> & <b>tag</b>\n\nlast"
+	doc := "<episodedetails>\n  <plot>" + escapeText(original) + "</plot>\n</episodedetails>\n"
+	summary := "Overview.\n\n#### Key points\n\n- **00:10** First"
+
+	md, err := withPlot(doc, summary, "markdown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, inner, _ := findPlot(md)
+	plot, _ := xmlText(inner)
+	want := summary + "\n\n" + detailsOpen +
+		"https://www.youtube.com/watch?v=8idr1WZ1A7Q<br><br>#hashtag line<br>a &lt;br&gt; &amp; &lt;b&gt;tag&lt;/b&gt;<br><br>last" +
+		detailsEnd + "\n\n" + mdMarker
+	if plot != want {
+		t.Fatalf("plot:\n%q\nwant\n%q", plot, want)
+	}
+	// The folded description is one line: Markdown cannot reflow it.
+	if strings.Contains(strings.SplitN(plot, detailsOpen, 2)[1], "\n\n#") {
+		t.Error("description escaped its HTML block")
+	}
+	if again, _ := withPlot(md, summary, "markdown"); again != md {
+		t.Error("second markdown injection changed the file")
+	}
+	// Back to text: the original comes out exactly.
+	text, _ := withPlot(md, "S", "text")
+	_, _, inner, _ = findPlot(text)
+	plot, _ = xmlText(inner)
+	if plot != "S\n\n"+plotMarker+"\n"+original {
+		t.Errorf("text after markdown:\n%q", plot)
+	}
+	// And text-injected plots (the v0.1.4 layout) convert to markdown.
+	if conv, _ := withPlot(text, summary, "markdown"); conv != md {
+		t.Errorf("text→markdown differs from a fresh markdown injection:\n%s", conv)
+	}
+}
+
+func TestWithPlotMarkdownEmptyOriginal(t *testing.T) {
+	got, _ := withPlot("<e><plot/></e>", "S", "markdown")
+	if got != "<e><plot>S\n\n"+escapeText(mdMarker)+"</plot></e>" {
+		t.Errorf("got %q", got)
+	}
+	if again, _ := withPlot(got, "S", "markdown"); again != got {
+		t.Errorf("not idempotent: %q", again)
+	}
+}
+
+func TestPlotMarkdown(t *testing.T) {
+	s := Summary{Overview: "It explains **Bayes**.", KeyPoints: []KeyPoint{{"0:10", "First"}}}
+	s.tidy(600)
+	md := s.Markdown(Provenance{Model: "m", Source: "video", Generated: time.Unix(0, 0)})
+	want := "It explains **Bayes**.\n\n#### Key points\n\n- **00:10** First"
+	if got := plotMarkdown(md); got != want {
+		t.Errorf("got\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestChaptersReachThePrompt(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, "x [abcdefghijk]")
+	os.WriteFile(base+".info.json", []byte(`{"id":"abcdefghijk","duration":900,"description":"About it.","chapters":[{"start_time":0,"title":"Intro"},{"start_time":95.5,"title":"The trick"},{"start_time":600,"title":" "}]}`), 0o644)
+	m, err := loadMeta(Video{Base: base})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Chapters) != 2 || m.Chapters[1] != (Chapter{95, "The trick"}) {
+		t.Fatalf("chapters %+v", m.Chapters)
+	}
+	p := prompt(m, "")
+	for _, want := range []string{"00:00 Intro\n01:35 The trick\n", "Follow the creator's chapters", "Do not restate the description"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt lacks %q:\n%s", want, p)
+		}
+	}
+	if p2 := prompt(Meta{Title: "t"}, ""); strings.Contains(p2, "chapters") || strings.Contains(p2, "restate") {
+		t.Errorf("no chapters or description, yet:\n%s", p2)
 	}
 }

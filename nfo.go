@@ -7,23 +7,37 @@ import (
 	"strings"
 )
 
-// The line between the summary and ytdl-sub's original plot. Its presence is
-// how a later run tells an injected plot from a freshly regenerated one, so
-// changing it re-injects every .nfo once (harmless, just a library-wide
-// refresh).
-const plotMarker = "──────── YouTube description ────────"
+// How the summary and ytdl-sub's original plot share the <plot> element.
+// Every layout leaves a marker, which is how a later run tells an injected
+// plot from a freshly regenerated one and recovers the original under it.
+// A layout change re-injects every .nfo once (one library-wide refresh).
+const (
+	// PLOT_FORMAT=text: plain text for any client. The original follows
+	// this line.
+	plotMarker = "──────── YouTube description ────────"
+
+	// PLOT_FORMAT=markdown: jellyfin-web renders the overview as Markdown
+	// (markdown-it with HTML, then DOMPurify), as do the apps built on it.
+	// The original sits folded in <details>, on one line with <br> breaks, so
+	// Markdown cannot reflow it or read a "#hashtag" line as a heading. The
+	// comment marks the plot as ours even when there is no original; HTML
+	// comments never display.
+	mdMarker    = "<!-- video-summarizer -->"
+	detailsOpen = "<details><summary>YouTube description</summary>"
+	detailsEnd  = "</details>"
+)
 
 // injectPlot puts summary at the top of the .nfo plot, keeping the original
-// below the marker. It edits the <plot> element textually: re-marshalling the
-// whole document would reorder or reformat what ytdl-sub wrote. Reports
-// whether the file changed.
-func injectPlot(nfoPath, summary string, dryRun bool) (bool, error) {
+// below it in the given format. It edits the <plot> element textually:
+// re-marshalling the whole document would reorder or reformat what ytdl-sub
+// wrote. Reports whether the file changed.
+func injectPlot(nfoPath, summary, format string, dryRun bool) (bool, error) {
 	raw, err := os.ReadFile(nfoPath)
 	if err != nil {
 		return false, err
 	}
 	doc := string(raw)
-	newDoc, err := withPlot(doc, summary)
+	newDoc, err := withPlot(doc, summary, format)
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", nfoPath, err)
 	}
@@ -36,21 +50,28 @@ func injectPlot(nfoPath, summary string, dryRun bool) (bool, error) {
 	return true, writeAtomic(nfoPath, []byte(newDoc))
 }
 
-func withPlot(doc, summary string) (string, error) {
+func withPlot(doc, summary, format string) (string, error) {
 	start, end, inner, ok := findPlot(doc)
-	original := ""
+	current := ""
 	if ok {
 		var err error
-		if original, err = xmlText(inner); err != nil {
+		if current, err = xmlText(inner); err != nil {
 			return "", err
 		}
 	}
-	if _, after, found := strings.Cut(original, plotMarker); found {
-		original = strings.TrimPrefix(after, "\n")
-	}
-	plot := summary + "\n\n" + plotMarker
-	if original != "" {
-		plot += "\n" + original
+	original := originalPlot(current)
+	var plot string
+	if format == "markdown" {
+		plot = summary
+		if original != "" {
+			plot += "\n\n" + detailsOpen + htmlLines(original) + detailsEnd
+		}
+		plot += "\n\n" + mdMarker
+	} else {
+		plot = summary + "\n\n" + plotMarker
+		if original != "" {
+			plot += "\n" + original
+		}
 	}
 	elem := "<plot>" + escapeText(plot) + "</plot>"
 	if ok {
@@ -62,6 +83,36 @@ func withPlot(doc, summary string) (string, error) {
 		return "", fmt.Errorf("no root element")
 	}
 	return doc[:i] + "  " + elem + "\n" + doc[i:], nil
+}
+
+// originalPlot recovers ytdl-sub's plot from a plot in either layout, or
+// returns it unchanged if it carries no marker.
+func originalPlot(plot string) string {
+	if strings.Contains(plot, mdMarker) {
+		_, after, found := strings.Cut(plot, detailsOpen)
+		if !found {
+			return ""
+		}
+		body, _, _ := strings.Cut(after, detailsEnd)
+		return unhtmlLines(body)
+	}
+	if _, after, found := strings.Cut(plot, plotMarker); found {
+		return strings.TrimPrefix(after, "\n")
+	}
+	return plot
+}
+
+// htmlLines escapes text for HTML and joins its lines with <br>, so it stays
+// a single HTML block. unhtmlLines reverses it exactly: a literal "<br>" in
+// the text was escaped, so every remaining <br> is ours.
+func htmlLines(s string) string {
+	s = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "\r", "").Replace(strings.TrimRight(s, "\n"))
+	return strings.ReplaceAll(s, "\n", "<br>")
+}
+
+func unhtmlLines(s string) string {
+	s = strings.ReplaceAll(s, "<br>", "\n")
+	return strings.NewReplacer("&lt;", "<", "&gt;", ">", "&amp;", "&").Replace(s)
 }
 
 // findPlot locates <plot>...</plot> or <plot/>, returning the byte range of

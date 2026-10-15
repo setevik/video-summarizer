@@ -65,18 +65,36 @@ func (s Summary) Markdown(p Provenance) string {
 	return b.String()
 }
 
+// summaryBody is a .summary.md without its front matter.
+func summaryBody(md string) string {
+	if rest, ok := strings.CutPrefix(md, "---\n"); ok {
+		if i := strings.Index(rest, "\n---\n"); i >= 0 {
+			return strings.TrimSpace(rest[i+len("\n---\n"):])
+		}
+	}
+	return strings.TrimSpace(md)
+}
+
+// plotMarkdown is the summary as the Markdown jellyfin-web renders: the
+// file's own body, with the section heading made small enough for an
+// overview (and for the episode lists, which render it too).
+func plotMarkdown(md string) string {
+	var lines []string
+	for _, l := range strings.Split(summaryBody(md), "\n") {
+		if h, ok := strings.CutPrefix(l, "## "); ok {
+			l = "#### " + h
+		}
+		lines = append(lines, strings.TrimRight(l, " \t"))
+	}
+	return strings.Join(lines, "\n")
+}
+
 // plotText turns a .summary.md into the plain text that goes into the .nfo
 // plot. It works on whatever the file holds rather than on a Summary, because
 // the file is the source of truth and may have been edited by hand.
 func plotText(md string) string {
-	body := md
-	if rest, ok := strings.CutPrefix(body, "---\n"); ok {
-		if i := strings.Index(rest, "\n---\n"); i >= 0 {
-			body = rest[i+len("\n---\n"):]
-		}
-	}
 	var lines []string
-	for _, l := range strings.Split(strings.TrimSpace(body), "\n") {
+	for _, l := range strings.Split(summaryBody(md), "\n") {
 		l = strings.TrimRight(l, " \t")
 		if h, ok := strings.CutPrefix(l, "## "); ok {
 			l = h + ":"
