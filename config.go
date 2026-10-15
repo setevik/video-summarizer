@@ -36,6 +36,10 @@ type Config struct {
 	CallTimeout time.Duration
 	MaxAttempts int
 
+	// Leave YouTube Shorts unsummarized: a one-minute vertical clip needs no
+	// overview, and in a Shorts-heavy channel they are most of the calls.
+	SkipShorts bool
+
 	// "transcript": summarize from the original-language .srt when it passes
 	// the checks below, and send the video only when it does not. "video":
 	// the reverse. Transcripts cost ~1/25 of video at low media resolution
@@ -106,6 +110,9 @@ func loadConfig() (Config, error) {
 		return c, fmt.Errorf("CALL_TIMEOUT: %w", err)
 	}
 	if c.RunOnStart, err = envBool("RUN_ON_START", false); err != nil {
+		return c, err
+	}
+	if c.SkipShorts, err = envBool("SKIP_SHORTS", false); err != nil {
 		return c, err
 	}
 	if c.DryRun, err = envBool("DRY_RUN", false); err != nil {

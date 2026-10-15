@@ -80,6 +80,9 @@ type Meta struct {
 	Manual      map[string]bool
 	Auto        map[string]bool
 	HasInfoJSON bool
+	// A YouTube Short: fetched from a channel's /shorts tab, or vertical and
+	// at most 3 minutes long (YouTube's own definition). Needs .info.json.
+	IsShort bool
 }
 
 type infoJSON struct {
@@ -92,6 +95,9 @@ type infoJSON struct {
 	Language          string                     `json:"language"`
 	Subtitles         map[string]json.RawMessage `json:"subtitles"`
 	AutomaticCaptions map[string]json.RawMessage `json:"automatic_captions"`
+	PlaylistURL       string                     `json:"playlist_webpage_url"`
+	Width             int                        `json:"width"`
+	Height            int                        `json:"height"`
 }
 
 func loadMeta(v Video) (Meta, error) {
@@ -105,6 +111,8 @@ func loadMeta(v Video) (Meta, error) {
 			return m, err
 		}
 		m.HasInfoJSON = true
+		m.IsShort = strings.HasSuffix(strings.TrimRight(ij.PlaylistURL, "/"), "/shorts") ||
+			(ij.Height > ij.Width && ij.Duration > 0 && ij.Duration <= 180)
 		m.ID, m.Title, m.Channel, m.Description = ij.ID, ij.Title, ij.Channel, ij.Description
 		m.URL = ij.WebpageURL
 		m.Duration = int(ij.Duration)
