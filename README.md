@@ -15,7 +15,9 @@ For each video, newest first:
    `<plot>`, with the original plot below it (see [Plot layout](#plot-layout)).
 2. **`.summary.md` exists:** re-inject it if the `.nfo` lacks it (ytdl-sub
    regenerated the file) or if it differs (the summary was edited). No API call.
-3. Ask Jellyfin to refresh every item whose `.nfo` changed.
+3. Set each summarized video's Jellyfin overview to its `.nfo` plot, and lock
+   the field. Only overviews that differ are written, so a run also repairs
+   any that drifted.
 
 - **`.summary.md` is the source of truth.** Hand edits reach the `.nfo` on the
   next run. Delete the file to regenerate the summary.
@@ -120,7 +122,7 @@ Environment only.
 | `CALL_INTERVAL` | `7s` | spacing between calls |
 | `CALL_TIMEOUT` | `10m` | upper bound on one call; a timeout is retried next run |
 | `MAX_ATTEMPTS` | `3` | |
-| `JELLYFIN_URL`, `JELLYFIN_API_KEY` | — | unset: no refresh, Jellyfin picks changes up on its next scan |
+| `JELLYFIN_URL`, `JELLYFIN_API_KEY` | — | unset: summaries reach the `.nfo` only; see below |
 | `RUN_AT` | `10:30` | daemon's daily run, container `TZ` |
 | `RUN_ON_START` | `false` | |
 | `DRY_RUN` | `false` | print summaries, write nothing |
@@ -133,9 +135,15 @@ for Vertex: the Gemini API backend requires a key.
 ## Jellyfin requirements
 
 - Items are matched by path, so mount the library where Jellyfin has it.
-- The refresh uses `FullRefresh` + `replaceAllMetadata`, the only mode
-  guaranteed to re-read a changed `.nfo`. That is safe only in a library with
-  **no metadata fetchers** enabled.
+- **Why the overview is set through the API, not by a metadata refresh:**
+  ytdl-sub also embeds the original description in each `.mp4` as a
+  `synopsis` tag. On a refresh, Jellyfin's media probe takes the overview
+  from that, not from the `.nfo` plot, and a replace-all refresh empties it.
+  So the job writes the overview as the web UI's metadata editor does, and
+  locks it, which keeps it through any refresh or rescan.
+- A locked overview stays as the job set it. To give one back to Jellyfin,
+  delete the video's `.summary.md` and unlock **Overview** in the item's
+  metadata editor.
 - Turn **save metadata to media folders** off, or Jellyfin may write over the
   injected plot.
 

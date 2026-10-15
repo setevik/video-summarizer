@@ -115,6 +115,19 @@ func unhtmlLines(s string) string {
 	return strings.NewReplacer("&lt;", "<", "&gt;", ">", "&amp;", "&").Replace(s)
 }
 
+// nfoPlot returns the plot text an .nfo holds, as Jellyfin would read it.
+func nfoPlot(nfoPath string) (string, error) {
+	raw, err := os.ReadFile(nfoPath)
+	if err != nil {
+		return "", err
+	}
+	_, _, inner, ok := findPlot(string(raw))
+	if !ok {
+		return "", nil
+	}
+	return xmlText(inner)
+}
+
 // findPlot locates <plot>...</plot> or <plot/>, returning the byte range of
 // the whole element and its raw inner content.
 func findPlot(doc string) (start, end int, inner string, ok bool) {

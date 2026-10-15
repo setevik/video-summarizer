@@ -12,9 +12,9 @@ import (
 )
 
 type runStats struct {
-	Videos, Summarized, FromTranscript, Reinjected, Failed, GivenUp, Refreshed, Skipped int
-	VideoSeconds, PromptTokens, OutputTokens                                            int
-	Stopped                                                                             string
+	Videos, Summarized, FromTranscript, Reinjected, Failed, GivenUp, OverviewsSet, Skipped int
+	VideoSeconds, PromptTokens, OutputTokens                                               int
+	Stopped                                                                                string
 }
 
 type runner struct {
@@ -53,7 +53,9 @@ func (r *runner) run(ctx context.Context) (runStats, error) {
 		return st, err
 	}
 	var (
-		changed   []string
+		// Every summarized video's plot, for Jellyfin: all of them, not just
+		// those changed this run, so a drifted overview is set again.
+		overviews = map[string]string{}
 		calls     int
 		transient int
 		runErr    error
@@ -71,8 +73,8 @@ func (r *runner) run(ctx context.Context) (runStats, error) {
 				r.log.Warn("inject", "video", v.Name(), "err", err)
 			} else if c {
 				st.Reinjected++
-				changed = append(changed, v.Path)
 			}
+			r.collect(overviews, v)
 			continue
 		case !errors.Is(err, fs.ErrNotExist):
 			r.log.Warn("read summary", "video", v.Name(), "err", err)
@@ -128,31 +130,38 @@ func (r *runner) run(ctx context.Context) (runStats, error) {
 		}
 		if err := writeAtomic(v.SummaryPath(), []byte(res)); err != nil {
 			// Likely the disk or permissions, so the next video would fail
-			// too. Stop generating, but still save state and refresh what
+			// too. Stop generating, but still save state and update what
 			// already changed.
 			st.Stopped = "write error"
 			runErr = fmt.Errorf("writing summary: %w", err)
 			continue
 		}
-		if c, err := r.inject(v, res); err != nil {
+		if _, err := r.inject(v, res); err != nil {
 			r.log.Warn("inject", "video", v.Name(), "err", err)
-		} else if c {
-			changed = append(changed, v.Path)
 		}
+		r.collect(overviews, v)
 	}
 	if !r.cfg.DryRun {
 		if err := fails.save(); err != nil {
 			r.log.Warn("save failures", "err", err)
 		}
 	}
-	if r.jf != nil && len(changed) > 0 && !r.cfg.DryRun {
-		n, err := r.jf.refresh(ctx, changed)
-		st.Refreshed = n
+	if r.jf != nil && !r.cfg.DryRun {
+		n, err := r.jf.setOverviews(ctx, overviews)
+		st.OverviewsSet = n
 		if err != nil {
-			r.log.Warn("jellyfin refresh", "err", err)
+			r.log.Warn("jellyfin overviews", "err", err)
 		}
 	}
 	return st, runErr
+}
+
+// collect records the plot a video's .nfo now holds, for Jellyfin.
+func (r *runner) collect(overviews map[string]string, v Video) {
+	plot, err := nfoPlot(v.NFOPath())
+	if err == nil && plot != "" {
+		overviews[v.Path] = plot
+	}
 }
 
 // inject writes the summary into the .nfo plot. A video whose .nfo does not
