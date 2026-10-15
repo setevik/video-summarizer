@@ -12,9 +12,9 @@ import (
 )
 
 type runStats struct {
-	Videos, Summarized, FromTranscript, Reinjected, Failed, GivenUp, Refreshed int
-	VideoSeconds, PromptTokens, OutputTokens                                   int
-	Stopped                                                                    string
+	Videos, Summarized, FromTranscript, Reinjected, Failed, GivenUp, Refreshed, Skipped int
+	VideoSeconds, PromptTokens, OutputTokens                                            int
+	Stopped                                                                             string
 }
 
 type runner struct {
@@ -28,6 +28,10 @@ type runner struct {
 // errStop ends generation for this run (quota or per-run cap); videos that
 // already have a summary are still re-injected.
 var errStop = errors.New("stop generating")
+
+// errSkip means the video is excluded by configuration (SKIP_SHORTS): no
+// call, no summary, no failure.
+var errSkip = errors.New("excluded")
 
 // errAuth also ends generation, without counting against the video: the
 // credentials or project are at fault, and every video would fail alike.
@@ -89,6 +93,9 @@ func (r *runner) run(ctx context.Context) (runStats, error) {
 
 		res, err := r.summarize(ctx, v, &st, &calls)
 		switch {
+		case errors.Is(err, errSkip):
+			st.Skipped++
+			continue
 		case errors.Is(err, errStop):
 			st.Stopped = "quota"
 			continue
@@ -171,6 +178,9 @@ func (r *runner) summarize(ctx context.Context, v Video, st *runStats, calls *in
 	m, err := loadMeta(v)
 	if err != nil {
 		return "", fmt.Errorf("metadata: %w", err)
+	}
+	if r.cfg.SkipShorts && m.IsShort {
+		return "", errSkip
 	}
 	tc := checkTranscript(r.cfg, v, m)
 	order := []string{"transcript", "video"}

@@ -88,6 +88,16 @@ func runEval(ctx context.Context, cfg Config, models, modes []string, n int, out
 		}
 		metas[v.Base] = m
 	}
+	if cfg.SkipShorts {
+		// Sample what a run would summarize.
+		kept := videos[:0]
+		for _, v := range videos {
+			if !metas[v.Base].IsShort {
+				kept = append(kept, v)
+			}
+		}
+		videos = kept
+	}
 	picked := sample(cfg.Roots, videos, metas, n)
 	total := 0
 	for _, v := range picked {
@@ -216,7 +226,7 @@ func runPlan(cfg Config) error {
 	if err != nil {
 		return err
 	}
-	var pending, videoSec, textTok, viaTranscript, viaVideo, none int
+	var pending, videoSec, textTok, viaTranscript, viaVideo, none, skipped int
 	for _, v := range videos {
 		if _, err := os.Stat(v.SummaryPath()); err == nil {
 			continue
@@ -224,6 +234,11 @@ func runPlan(cfg Config) error {
 		m, err := loadMeta(v)
 		if err != nil {
 			return fmt.Errorf("%s: %w", v.Name(), err)
+		}
+		if cfg.SkipShorts && m.IsShort {
+			skipped++
+			fmt.Printf("%-14s %8s  %-12s %-34s %s/%s\n", "skip:short", formatTS(m.Duration), "-", "", folderOf(cfg.Roots, v), v.Name())
+			continue
 		}
 		pending++
 		tc := checkTranscript(cfg, v, m)
@@ -252,7 +267,7 @@ func runPlan(cfg Config) error {
 	if cfg.VideoSecondsPerRun > 0 {
 		days = (videoSec + cfg.VideoSecondsPerRun - 1) / cfg.VideoSecondsPerRun
 	}
-	fmt.Printf("\n%d pending (PREFER_SOURCE=%s): %d by transcript (~%d tokens), %d by video (%s, ~%d tokens, %d daily runs at VIDEO_SECONDS_PER_RUN=%d), %d with no usable source\n",
-		pending, cfg.PreferSource, viaTranscript, textTok, viaVideo, formatTS(videoSec), videoSec*videoTokensPerSecond, days, cfg.VideoSecondsPerRun, none)
+	fmt.Printf("\n%d pending (PREFER_SOURCE=%s): %d by transcript (~%d tokens), %d by video (%s, ~%d tokens, %d daily runs at VIDEO_SECONDS_PER_RUN=%d), %d with no usable source; %d Shorts skipped\n",
+		pending, cfg.PreferSource, viaTranscript, textTok, viaVideo, formatTS(videoSec), videoSec*videoTokensPerSecond, days, cfg.VideoSecondsPerRun, none, skipped)
 	return nil
 }

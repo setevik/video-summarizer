@@ -21,6 +21,11 @@ For each video, newest first:
   next run. Delete the file to regenerate the summary.
 - **Video ID and URL:** from yt-dlp's `.info.json`, else the `[id]` at the end
   of the file name.
+- **Shorts** are skipped with `SKIP_SHORTS=true`: no call, no summary, no
+  failure. A Short is a video yt-dlp fetched from a channel's `/shorts` tab,
+  or one that is vertical and at most 3 minutes long. That needs
+  `.info.json`; without it a video is never taken for a Short. `plan` lists
+  them as `skip:short`.
 - **Failures** are counted in `$STATE_DIR/failures.json`, with the reason
   each source was passed over. After `MAX_ATTEMPTS` the job stops trying a
   video, until its `.srt` sidecars change (a backfilled subtitle, say), which
@@ -79,6 +84,7 @@ Environment only.
 | `THINKING_LEVEL` | `LOW` | |
 | `VIDEO_SECONDS_PER_RUN` | `27000` | URL input budget; the free tier allows 8 h/day |
 | `CALLS_PER_RUN` | `200` | `0` pauses generation; re-injection still runs |
+| `SKIP_SHORTS` | `false` | leave YouTube Shorts unsummarized (see below) |
 | `PREFER_SOURCE` | `transcript` | `transcript` or `video`: which source to try first |
 | `MIN_TRANSCRIPT_WPM` | `10` | below this, a transcript is not used |
 | `MIN_TRANSCRIPT_COVERAGE` | `0.5` | last caption before this fraction of the video: not used |

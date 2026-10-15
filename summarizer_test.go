@@ -420,3 +420,30 @@ func TestRunWriteErrorStopsAndSavesState(t *testing.T) {
 		t.Errorf("failures not saved: %v", err)
 	}
 }
+
+func TestRunSkipsShorts(t *testing.T) {
+	root, vs := newLibrary(t, "aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc")
+	// From the /shorts tab; vertical and short; landscape and short (kept).
+	os.WriteFile(vs[0].Base+".info.json", []byte(`{"id":"aaaaaaaaaaa","duration":600,"language":"en","automatic_captions":{"en":[]},"playlist_webpage_url":"https://www.youtube.com/@x/shorts"}`), 0o644)
+	os.WriteFile(vs[1].Base+".info.json", []byte(`{"id":"bbbbbbbbbbb","duration":59,"language":"en","automatic_captions":{"en":[]},"width":1080,"height":1920}`), 0o644)
+	os.WriteFile(vs[2].Base+".info.json", []byte(`{"id":"ccccccccccc","duration":59,"language":"en","automatic_captions":{"en":[]},"width":1920,"height":1080}`), 0o644)
+	f := &fake{}
+	r := testRunner(root, f)
+	r.cfg.SkipShorts = true
+	st, err := r.run(context.Background())
+	if err != nil || st.Skipped != 2 || st.Summarized != 1 || st.Failed != 0 {
+		t.Fatalf("err %v, %+v", err, st)
+	}
+	if _, err := os.Stat(vs[2].SummaryPath()); err != nil {
+		t.Error("the landscape clip should be summarized")
+	}
+	for _, v := range vs[:2] {
+		if _, err := os.Stat(v.SummaryPath()); err == nil {
+			t.Errorf("%s: a Short was summarized", v.Name())
+		}
+	}
+	fails, _ := loadFailures(r.cfg.StateDir)
+	if len(fails.Entries) != 0 {
+		t.Errorf("skips recorded as failures: %v", fails.Entries)
+	}
+}
