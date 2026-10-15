@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -524,5 +527,80 @@ func TestChaptersReachThePrompt(t *testing.T) {
 	}
 	if p2 := prompt(Meta{Title: "t"}, ""); strings.Contains(p2, "chapters") || strings.Contains(p2, "restate") {
 		t.Errorf("no chapters or description, yet:\n%s", p2)
+	}
+}
+
+// fakeJellyfin serves the endpoints setOverviews uses and records POSTed items.
+func fakeJellyfin(t *testing.T, root string, items []map[string]string) (*httptest.Server, map[string]map[string]any) {
+	posted := map[string]map[string]any{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/Library/VirtualFolders":
+			json.NewEncoder(w).Encode([]map[string]any{{"ItemId": "lib", "Locations": []string{root}}})
+		case r.Method == "GET" && r.URL.Path == "/Items":
+			if r.URL.Query().Get("ParentId") != "lib" || !strings.Contains(r.URL.Query().Get("Fields"), "Overview") {
+				t.Errorf("items query %v", r.URL.Query())
+			}
+			json.NewEncoder(w).Encode(map[string]any{"Items": items})
+		case r.Method == "GET" && r.URL.Path == "/Users":
+			json.NewEncoder(w).Encode([]map[string]any{{"Id": "u1"}})
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/Users/u1/Items/"):
+			id := strings.TrimPrefix(r.URL.Path, "/Users/u1/Items/")
+			json.NewEncoder(w).Encode(map[string]any{"Id": id, "Name": "n", "Overview": "old",
+				"LockedFields": []string{"Name"}, "ProviderIds": map[string]string{"x": "1"}})
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/Items/"):
+			var item map[string]any
+			json.NewDecoder(r.Body).Decode(&item)
+			posted[strings.TrimPrefix(r.URL.Path, "/Items/")] = item
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL)
+			http.Error(w, "no", http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, posted
+}
+
+func TestSetOverviewsWritesStaleAndLocks(t *testing.T) {
+	root := "/lib"
+	srv, posted := fakeJellyfin(t, root, []map[string]string{
+		{"Id": "a", "Path": "/lib/a.mp4", "Overview": "old"},
+		{"Id": "b", "Path": "/lib/b.mp4", "Overview": "B plot"},
+		{"Id": "c", "Path": "/lib/c.mp4", "Overview": "untouched"},
+	})
+	j := &jellyfin{base: srv.URL, key: "k", http: srv.Client()}
+	n, err := j.setOverviews(context.Background(), map[string]string{"/lib/a.mp4": "A plot", "/lib/b.mp4": "B plot"})
+	if err != nil || n != 1 || len(posted) != 1 {
+		t.Fatalf("n %d err %v posted %v", n, err, posted)
+	}
+	a := posted["a"]
+	locked, _ := json.Marshal(a["LockedFields"])
+	if a["Overview"] != "A plot" || string(locked) != `["Name","Overview"]` || a["ProviderIds"] == nil || a["Name"] != "n" {
+		t.Errorf("posted %v", a)
+	}
+}
+
+func TestRunSetsOverviewsForEverySummary(t *testing.T) {
+	root, vs := newLibrary(t, "aaaaaaaaaaa", "bbbbbbbbbbb")
+	// a was summarized on an earlier run; b is summarized now.
+	os.WriteFile(vs[0].SummaryPath(), []byte("---\nmodel: m\n---\n\nEarlier summary\n"), 0o644)
+	var items []map[string]string
+	for i, v := range vs {
+		items = append(items, map[string]string{"Id": fmt.Sprint("item", i), "Path": v.Path, "Overview": "youtube description"})
+	}
+	srv, posted := fakeJellyfin(t, root, items)
+	r := testRunner(root, &fake{})
+	r.cfg.PlotFormat = "markdown"
+	r.jf = &jellyfin{base: srv.URL, key: "k", http: srv.Client()}
+	st, err := r.run(context.Background())
+	if err != nil || st.OverviewsSet != 2 || len(posted) != 2 {
+		t.Fatalf("err %v, %+v, posted %d", err, st, len(posted))
+	}
+	for id, item := range posted {
+		o, _ := item["Overview"].(string)
+		if !strings.HasSuffix(o, mdMarker) || !strings.Contains(o, detailsOpen) {
+			t.Errorf("%s: overview is not the .nfo plot:\n%s", id, o)
+		}
 	}
 }

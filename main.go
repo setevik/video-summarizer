@@ -78,7 +78,7 @@ func pass(ctx context.Context, r *runner) error {
 	r.log.Info("run done", "took", time.Since(start).Round(time.Second),
 		"videos", st.Videos, "summarized", st.Summarized, "from_transcript", st.FromTranscript,
 		"reinjected", st.Reinjected, "failed", st.Failed, "given_up", st.GivenUp, "skipped", st.Skipped,
-		"jellyfin_refreshed", st.Refreshed, "video_seconds", st.VideoSeconds,
+		"jellyfin_overviews_set", st.OverviewsSet, "video_seconds", st.VideoSeconds,
 		"prompt_tokens", st.PromptTokens, "output_tokens", st.OutputTokens, "stopped", st.Stopped)
 	return err
 }
