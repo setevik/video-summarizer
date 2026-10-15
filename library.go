@@ -83,6 +83,13 @@ type Meta struct {
 	// A YouTube Short: fetched from a channel's /shorts tab, or vertical and
 	// at most 3 minutes long (YouTube's own definition). Needs .info.json.
 	IsShort bool
+	// The creator's chapters, when the video has them.
+	Chapters []Chapter
+}
+
+type Chapter struct {
+	Start int // seconds
+	Title string
 }
 
 type infoJSON struct {
@@ -96,8 +103,12 @@ type infoJSON struct {
 	Subtitles         map[string]json.RawMessage `json:"subtitles"`
 	AutomaticCaptions map[string]json.RawMessage `json:"automatic_captions"`
 	PlaylistURL       string                     `json:"playlist_webpage_url"`
-	Width             int                        `json:"width"`
-	Height            int                        `json:"height"`
+	Chapters          []struct {
+		Start float64 `json:"start_time"`
+		Title string  `json:"title"`
+	} `json:"chapters"`
+	Width  int `json:"width"`
+	Height int `json:"height"`
 }
 
 func loadMeta(v Video) (Meta, error) {
@@ -111,6 +122,11 @@ func loadMeta(v Video) (Meta, error) {
 			return m, err
 		}
 		m.HasInfoJSON = true
+		for _, c := range ij.Chapters {
+			if t := strings.TrimSpace(c.Title); t != "" {
+				m.Chapters = append(m.Chapters, Chapter{Start: int(c.Start), Title: t})
+			}
+		}
 		m.IsShort = strings.HasSuffix(strings.TrimRight(ij.PlaylistURL, "/"), "/shorts") ||
 			(ij.Height > ij.Width && ij.Duration > 0 && ij.Duration <= 180)
 		m.ID, m.Title, m.Channel, m.Description = ij.ID, ij.Title, ij.Channel, ij.Description

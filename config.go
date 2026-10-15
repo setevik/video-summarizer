@@ -36,6 +36,11 @@ type Config struct {
 	CallTimeout time.Duration
 	MaxAttempts int
 
+	// How the .nfo plot is laid out: "text" (any client) or "markdown"
+	// (jellyfin-web and the apps built on it: headings, and the original
+	// description folded away). See nfo.go.
+	PlotFormat string
+
 	// Leave YouTube Shorts unsummarized: a one-minute vertical clip needs no
 	// overview, and in a Shorts-heavy channel they are most of the calls.
 	SkipShorts bool
@@ -92,6 +97,10 @@ func loadConfig() (Config, error) {
 		if *i.dst, err = envInt(i.name, i.def); err != nil {
 			return c, err
 		}
+	}
+	c.PlotFormat = env("PLOT_FORMAT", "text")
+	if c.PlotFormat != "text" && c.PlotFormat != "markdown" {
+		return c, fmt.Errorf("PLOT_FORMAT %q: want text or markdown", c.PlotFormat)
 	}
 	c.PreferSource = env("PREFER_SOURCE", "transcript")
 	if c.PreferSource != "transcript" && c.PreferSource != "video" {

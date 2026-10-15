@@ -161,7 +161,11 @@ func (r *runner) inject(v Video, md string) (bool, error) {
 	if _, err := os.Stat(v.NFOPath()); errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
-	return injectPlot(v.NFOPath(), plotText(md), r.cfg.DryRun)
+	plot := plotText(md)
+	if r.cfg.PlotFormat == "markdown" {
+		plot = plotMarkdown(md)
+	}
+	return injectPlot(v.NFOPath(), plot, r.cfg.PlotFormat, r.cfg.DryRun)
 }
 
 // summarize returns the rendered .summary.md, "" to defer the video to a later

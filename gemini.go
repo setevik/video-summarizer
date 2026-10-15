@@ -143,13 +143,26 @@ func prompt(m Meta, transcript string) string {
 		fmt.Fprintf(&b, "Length: %s\n", formatTS(m.Duration))
 	}
 	if d := strings.TrimSpace(m.Description); d != "" {
-		fmt.Fprintf(&b, "\nYouTube description:\n<<<\n%s\n>>>\n", truncate(d, 4000))
+		fmt.Fprintf(&b, "\nYouTube description (viewers see it right below your summary):\n<<<\n%s\n>>>\n", truncate(d, 4000))
+	}
+	if len(m.Chapters) > 0 {
+		b.WriteString("\nThe creator's chapters, each with the time it starts:\n")
+		for _, c := range m.Chapters {
+			fmt.Fprintf(&b, "%s %s\n", formatTS(c.Start), c.Title)
+		}
 	}
 	if transcript != "" {
 		fmt.Fprintf(&b, "\nTranscript, each line prefixed with the time it starts:\n<<<\n%s>>>\n", transcript)
 	}
 	lo, hi := pointRange(m.Duration)
 	fmt.Fprintf(&b, "\nSummarize the video: an overview of 2-3 sentences, then %d-%d key points in the order they appear, each with the timestamp where it begins.", lo, hi)
+	if len(m.Chapters) > 0 {
+		// Creator chapters are exact; the model's own timestamps are not.
+		b.WriteString(" Follow the creator's chapters: a point about a chapter starts at that chapter's time. Skip intro, sponsor and outro chapters, and merge short ones to stay within the range.")
+	}
+	if strings.TrimSpace(m.Description) != "" {
+		b.WriteString(" Do not restate the description: say what the video covers that it does not.")
+	}
 	return b.String()
 }
 
