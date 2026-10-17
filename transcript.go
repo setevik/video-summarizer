@@ -18,7 +18,11 @@ var fallbackLangs = []string{"en", "he", "ru"}
 // pickTranscript chooses the .srt sidecar to send as a transcript, or "" when
 // there is none worth sending. A machine translation is never chosen: it is a
 // summary of a summary, and the timestamps drift.
-func pickTranscript(v Video, m Meta) (path, lang string) {
+//
+// local reports a sidecar YouTube did not provide: one beside a video whose
+// info.json lists no caption tracks at all, so it was made locally (speech
+// recognition on the library's own audio).
+func pickTranscript(v Video, m Meta) (path, lang string, local bool) {
 	have := map[string]string{}
 	entries, _ := os.ReadDir(filepath.Dir(v.Base))
 	prefix := v.Name() + "."
@@ -32,27 +36,52 @@ func pickTranscript(v Video, m Meta) (path, lang string) {
 		}
 	}
 	if len(have) == 0 {
-		return "", ""
+		return "", "", false
 	}
 	if !m.HasInfoJSON {
-		for _, l := range fallbackLangs {
-			if p, ok := have[l]; ok {
-				return p, l
-			}
-		}
-		return "", ""
+		p, l := firstOf(have, fallbackLangs)
+		return p, l, false
+	}
+	// YouTube offered no captions, so it offered no machine translations
+	// either: any sidecar was made locally, in the language its name gives.
+	// Often the only clue to the language, as such videos rarely have a
+	// language field.
+	if !hasCaptionTracks(m) {
+		p, l := firstOf(have, append([]string{m.Language}, fallbackLangs...))
+		return p, l, p != ""
 	}
 	// The original language, whether its track is manual or ASR.
 	if p, ok := have[m.Language]; ok && m.Language != "" && (m.Manual[m.Language] || m.Auto[m.Language]) {
-		return p, m.Language
+		return p, m.Language, false
 	}
 	// Otherwise a creator-provided track: a human translation is acceptable.
 	for _, l := range fallbackLangs {
 		if p, ok := have[l]; ok && m.Manual[l] {
+			return p, l, false
+		}
+	}
+	return "", "", false
+}
+
+// firstOf returns the sidecar for the first of langs that has one.
+func firstOf(have map[string]string, langs []string) (path, lang string) {
+	for _, l := range langs {
+		if p, ok := have[l]; ok && l != "" {
 			return p, l
 		}
 	}
 	return "", ""
+}
+
+// hasCaptionTracks reports whether the info.json lists any caption track.
+// Live chat replay is filed under subtitles ("live_chat") but is not one.
+func hasCaptionTracks(m Meta) bool {
+	for l := range m.Manual {
+		if l != "live" {
+			return true
+		}
+	}
+	return len(m.Auto) > 0
 }
 
 var (
@@ -191,9 +220,21 @@ func parseTS(s string) (int, bool) {
 // why it cannot be, if it cannot.
 type transcriptCheck struct {
 	Path, Lang, Text string
-	Stats            transcriptStats
+	// Made locally, not provided by YouTube; see pickTranscript.
+	Local bool
+	Stats transcriptStats
 	// "" when usable; otherwise a short reason for the log.
 	Problem string
+}
+
+// Source names the transcript in logs, plan output and a summary's front
+// matter: "transcript:he", or "transcript:he:local" for a local one, so its
+// summaries can be found and regenerated if the transcription is redone.
+func (c transcriptCheck) Source() string {
+	if c.Local {
+		return "transcript:" + c.Lang + ":local"
+	}
+	return "transcript:" + c.Lang
 }
 
 // Short videos are exempt from the coverage check: a one-minute sketch whose
@@ -202,7 +243,7 @@ const coverageMinSeconds = 120
 
 func checkTranscript(cfg Config, v Video, m Meta) transcriptCheck {
 	var c transcriptCheck
-	c.Path, c.Lang = pickTranscript(v, m)
+	c.Path, c.Lang, c.Local = pickTranscript(v, m)
 	if c.Path == "" {
 		c.Problem = "no original-language transcript"
 		return c

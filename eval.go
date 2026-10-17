@@ -141,7 +141,7 @@ func runEval(ctx context.Context, cfg Config, models, modes []string, n int, out
 						rows = append(rows, row)
 						continue
 					}
-					row.mode += ":" + tc.Lang
+					row.mode = tc.Source()
 					s, row.u, err = g.FromTranscript(ctx, m, tc.Text)
 				default:
 					return fmt.Errorf("unknown mode %q", mode)
@@ -194,7 +194,7 @@ func planEval(cfg Config, picked []Video, metas map[string]Meta, models, modes [
 					continue
 				}
 				textTok += len(tc.Text) / 4 // ~4 characters a token
-				route = append(route, "transcript:"+tc.Lang)
+				route = append(route, tc.Source())
 			}
 		}
 		fmt.Printf("%8s  orig=%-3s %-32s %s/%s\n", formatTS(m.Duration), m.Language, strings.Join(route, ","), folderOf(cfg.Roots, v), v.Name())
@@ -246,7 +246,7 @@ func runPlan(cfg Config) error {
 		var route string
 		switch {
 		case tc.Problem == "" && (cfg.PreferSource == "transcript" || !videoOK):
-			route = "transcript:" + tc.Lang
+			route = tc.Source()
 			viaTranscript++
 			textTok += len(tc.Text) / 4
 		case videoOK:

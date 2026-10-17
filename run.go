@@ -214,7 +214,7 @@ func (r *runner) summarize(ctx context.Context, v Video, st *runStats, calls *in
 				continue
 			}
 			s, u, err = r.call(ctx, calls, func() (Summary, Usage, error) { return r.sum.FromTranscript(ctx, m, tc.Text) })
-			src = "transcript:" + tc.Lang
+			src = tc.Source()
 		case "video":
 			switch {
 			case m.URL == "":

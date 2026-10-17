@@ -75,6 +75,12 @@ Two inputs, tried in `PREFER_SOURCE` order (default `transcript`):
 - **Transcript:** the video's original-language `.srt` sidecar, manual or
   speech recognition, else a creator-provided one. Machine translations are
   never sent.
+  - **Local transcripts:** when the `.info.json` lists no caption tracks at
+    all, YouTube offered nothing to translate, so a sidecar there was made
+    locally (e.g. Whisper on the video's audio). It is used in the language
+    its name gives (`<video>.he.srt`), and the summary's `source` reads
+    `transcript:he:local`, so those summaries can be found and regenerated if
+    the transcription is redone.
 - **Video:** the YouTube URL at low media resolution (~95 tokens/s). Needs a
   URL, a length within `MAX_URL_SECONDS`, and room in `VIDEO_SECONDS_PER_RUN`.
 
