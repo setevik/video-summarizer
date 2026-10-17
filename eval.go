@@ -88,11 +88,11 @@ func runEval(ctx context.Context, cfg Config, models, modes []string, n int, out
 		}
 		metas[v.Base] = m
 	}
-	if cfg.SkipShorts {
+	if cfg.SkipShorts || len(cfg.SkipVideoIDs) > 0 {
 		// Sample what a run would summarize.
 		kept := videos[:0]
 		for _, v := range videos {
-			if !metas[v.Base].IsShort {
+			if cfg.skipReason(metas[v.Base]) == "" {
 				kept = append(kept, v)
 			}
 		}
@@ -235,9 +235,9 @@ func runPlan(cfg Config) error {
 		if err != nil {
 			return fmt.Errorf("%s: %w", v.Name(), err)
 		}
-		if cfg.SkipShorts && m.IsShort {
+		if why := cfg.skipReason(m); why != "" {
 			skipped++
-			fmt.Printf("%-14s %8s  %-12s %-34s %s/%s\n", "skip:short", formatTS(m.Duration), "-", "", folderOf(cfg.Roots, v), v.Name())
+			fmt.Printf("%-14s %8s  %-12s %-34s %s/%s\n", "skip:"+why, formatTS(m.Duration), "-", "", folderOf(cfg.Roots, v), v.Name())
 			continue
 		}
 		pending++
@@ -267,7 +267,7 @@ func runPlan(cfg Config) error {
 	if cfg.VideoSecondsPerRun > 0 {
 		days = (videoSec + cfg.VideoSecondsPerRun - 1) / cfg.VideoSecondsPerRun
 	}
-	fmt.Printf("\n%d pending (PREFER_SOURCE=%s): %d by transcript (~%d tokens), %d by video (%s, ~%d tokens, %d daily runs at VIDEO_SECONDS_PER_RUN=%d), %d with no usable source; %d Shorts skipped\n",
+	fmt.Printf("\n%d pending (PREFER_SOURCE=%s): %d by transcript (~%d tokens), %d by video (%s, ~%d tokens, %d daily runs at VIDEO_SECONDS_PER_RUN=%d), %d with no usable source; %d skipped by SKIP_SHORTS/SKIP_VIDEO_IDS\n",
 		pending, cfg.PreferSource, viaTranscript, textTok, viaVideo, formatTS(videoSec), videoSec*videoTokensPerSecond, days, cfg.VideoSecondsPerRun, none, skipped)
 	return nil
 }

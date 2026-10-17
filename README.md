@@ -28,6 +28,10 @@ For each video, newest first:
   or one that is vertical and at most 3 minutes long. That needs
   `.info.json`; without it a video is never taken for a Short. `plan` lists
   them as `skip:short`.
+- **Listed videos** are skipped the same way with `SKIP_VIDEO_IDS` (comma-
+  separated YouTube IDs): for a video no source serves well, such as an
+  uncaptioned stage recording that would spend a day's video budget. `plan`
+  lists them as `skip:listed`. Remove an ID to have it summarized.
 - **Failures** are counted in `$STATE_DIR/failures.json`, with the reason
   each source was passed over. After `MAX_ATTEMPTS` the job stops trying a
   video, until its `.srt` sidecars change (a backfilled subtitle, say), which
@@ -121,6 +125,7 @@ Environment only.
 | `CALLS_PER_RUN` | `200` | `0` pauses generation; re-injection still runs |
 | `PLOT_FORMAT` | `text` | `text` for any client, `markdown` for jellyfin-web and the apps built on it (see below) |
 | `SKIP_SHORTS` | `false` | leave YouTube Shorts unsummarized (see below) |
+| `SKIP_VIDEO_IDS` | — | comma-separated YouTube IDs never to summarize |
 | `PREFER_SOURCE` | `transcript` | `transcript` or `video`: which source to try first |
 | `MIN_TRANSCRIPT_WPM` | `10` | below this, a transcript is not used |
 | `MIN_TRANSCRIPT_COVERAGE` | `0.5` | last caption before this fraction of the video: not used |
