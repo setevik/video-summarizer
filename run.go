@@ -29,8 +29,8 @@ type runner struct {
 // already have a summary are still re-injected.
 var errStop = errors.New("stop generating")
 
-// errSkip means the video is excluded by configuration (SKIP_SHORTS): no
-// call, no summary, no failure.
+// errSkip means the video is excluded by configuration (SKIP_SHORTS,
+// SKIP_VIDEO_IDS): no call, no summary, no failure.
 var errSkip = errors.New("excluded")
 
 // errAuth also ends generation, without counting against the video: the
@@ -192,7 +192,7 @@ func (r *runner) summarize(ctx context.Context, v Video, st *runStats, calls *in
 	if err != nil {
 		return "", fmt.Errorf("metadata: %w", err)
 	}
-	if r.cfg.SkipShorts && m.IsShort {
+	if r.cfg.skipReason(m) != "" {
 		return "", errSkip
 	}
 	tc := checkTranscript(r.cfg, v, m)

@@ -505,6 +505,42 @@ func TestRunSkipsShorts(t *testing.T) {
 	}
 }
 
+func TestRunSkipsListedIDs(t *testing.T) {
+	root, vs := newLibrary(t, "aaaaaaaaaaa", "bbbbbbbbbbb")
+	// No transcript, so without the list it would go by video.
+	os.Remove(vs[0].Base + ".en.srt")
+	f := &fake{}
+	r := testRunner(root, f)
+	r.cfg.SkipVideoIDs = map[string]bool{"aaaaaaaaaaa": true}
+	r.cfg.PreferSource = "transcript"
+	st, err := r.run(context.Background())
+	if err != nil || st.Skipped != 1 || st.Summarized != 1 || f.videoCalls != 0 {
+		t.Fatalf("err %v, %+v, fake %+v", err, st, f)
+	}
+	if _, err := os.Stat(vs[0].SummaryPath()); err == nil {
+		t.Error("a listed video was summarized")
+	}
+	fails, _ := loadFailures(r.cfg.StateDir)
+	if len(fails.Entries) != 0 {
+		t.Errorf("skips recorded as failures: %v", fails.Entries)
+	}
+}
+
+func TestLoadConfigSkipVideoIDs(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "x")
+	t.Setenv("SKIP_VIDEO_IDS", " bpytBVL-M9g, -VDrE1VgVLM ,")
+	c, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.SkipVideoIDs) != 2 || !c.SkipVideoIDs["bpytBVL-M9g"] || !c.SkipVideoIDs["-VDrE1VgVLM"] {
+		t.Errorf("%v", c.SkipVideoIDs)
+	}
+	if c.skipReason(Meta{ID: "-VDrE1VgVLM"}) != "listed" || c.skipReason(Meta{ID: "other"}) != "" {
+		t.Error("skipReason")
+	}
+}
+
 func TestWithPlotMarkdown(t *testing.T) {
 	original := "https://www.youtube.com/watch?v=8idr1WZ1A7Q\n\n#hashtag line\na <br> & <b>tag</b>\n\nlast"
 	doc := "<episodedetails>\n  <plot>" + escapeText(original) + "</plot>\n</episodedetails>\n"

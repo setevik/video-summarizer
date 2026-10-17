@@ -44,6 +44,10 @@ type Config struct {
 	// Leave YouTube Shorts unsummarized: a one-minute vertical clip needs no
 	// overview, and in a Shorts-heavy channel they are most of the calls.
 	SkipShorts bool
+	// YouTube IDs never to summarize: no call, no summary, no failure. For a
+	// video no source serves well, e.g. an uncaptioned stage recording that
+	// would spend a day's video budget.
+	SkipVideoIDs map[string]bool
 
 	// "transcript": summarize from the original-language .srt when it passes
 	// the checks below, and send the video only when it does not. "video":
@@ -124,6 +128,10 @@ func loadConfig() (Config, error) {
 	if c.SkipShorts, err = envBool("SKIP_SHORTS", false); err != nil {
 		return c, err
 	}
+	c.SkipVideoIDs = map[string]bool{}
+	for _, id := range splitList(env("SKIP_VIDEO_IDS", "")) {
+		c.SkipVideoIDs[id] = true
+	}
 	if c.DryRun, err = envBool("DRY_RUN", false); err != nil {
 		return c, err
 	}
@@ -177,6 +185,18 @@ func envBool(name string, def bool) (bool, error) {
 		return false, fmt.Errorf("%s: %w", name, err)
 	}
 	return b, nil
+}
+
+// skipReason says why a video is excluded by configuration ("short",
+// "listed"), or "" when it is not.
+func (c Config) skipReason(m Meta) string {
+	switch {
+	case c.SkipVideoIDs[m.ID]:
+		return "listed"
+	case c.SkipShorts && m.IsShort:
+		return "short"
+	}
+	return ""
 }
 
 func splitList(s string) []string {
