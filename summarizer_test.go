@@ -119,8 +119,41 @@ func TestPickTranscript(t *testing.T) {
 		{"no info.json: list order", Meta{}, "en"},
 	}
 	for _, c := range cases {
-		if _, got := pickTranscript(v, c.m); got != c.want {
-			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		if _, got, local := pickTranscript(v, c.m); got != c.want || local {
+			t.Errorf("%s: got %q local=%v, want %q", c.name, got, local, c.want)
+		}
+	}
+}
+
+func TestPickTranscriptLocal(t *testing.T) {
+	// A fresh directory per case, holding only that case's sidecars.
+	video := func(langs ...string) Video {
+		base := filepath.Join(t.TempDir(), "s01.e01 - T [abcdefghijk]")
+		for _, l := range langs {
+			os.WriteFile(base+"."+l+".srt", []byte("x"), 0o644)
+		}
+		return Video{Path: base + ".mp4", Base: base}
+	}
+	none := Meta{HasInfoJSON: true, Manual: map[string]bool{}, Auto: map[string]bool{}}
+	cases := []struct {
+		name      string
+		srts      []string
+		m         Meta
+		want      string
+		wantLocal bool
+	}{
+		{"no tracks, no language: name gives it", []string{"he"}, none, "he", true},
+		{"no tracks: labelled language first", []string{"en", "fr"},
+			Meta{HasInfoJSON: true, Language: "fr", Manual: map[string]bool{}, Auto: map[string]bool{}}, "fr", true},
+		{"live chat is not a caption track", []string{"he"},
+			Meta{HasInfoJSON: true, Manual: map[string]bool{"live": true}, Auto: map[string]bool{}}, "he", true},
+		{"no tracks, no sidecar", nil, none, "", false},
+		{"tracks listed: a stray translation is still refused", []string{"ru"},
+			Meta{HasInfoJSON: true, Language: "en", Auto: map[string]bool{"en": true, "ru": true}, Manual: map[string]bool{}}, "", false},
+	}
+	for _, c := range cases {
+		if _, got, local := pickTranscript(video(c.srts...), c.m); got != c.want || local != c.wantLocal {
+			t.Errorf("%s: got %q local=%v, want %q local=%v", c.name, got, local, c.want, c.wantLocal)
 		}
 	}
 }
@@ -305,6 +338,27 @@ func TestRunTranscriptFirst(t *testing.T) {
 		if !strings.Contains(string(md), "source: "+want+"\n") {
 			t.Errorf("video %d: want %s, got\n%s", i, want, md)
 		}
+	}
+}
+
+// A video YouTube has no captions for, with a locally made .he.srt and no
+// language field -- the shape of a transcribed Hebrew lecture.
+func TestRunLocalTranscript(t *testing.T) {
+	root, vs := newLibrary(t, "aaaaaaaaaaa")
+	os.WriteFile(vs[0].Base+".info.json", []byte(`{"id":"aaaaaaaaaaa","duration":600}`), 0o644)
+	os.Rename(vs[0].Base+".en.srt", vs[0].Base+".he.srt")
+	f := &fake{}
+	r := testRunner(root, f)
+	r.cfg.PreferSource = "transcript"
+	if _, err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.transcriptCalls != 1 || f.videoCalls != 0 {
+		t.Fatalf("fake %+v", f)
+	}
+	md, _ := os.ReadFile(vs[0].SummaryPath())
+	if !strings.Contains(string(md), "source: transcript:he:local\n") {
+		t.Errorf("got\n%s", md)
 	}
 }
 

@@ -24,7 +24,7 @@ type KeyPoint struct {
 // change can later find what produced a given summary.
 type Provenance struct {
 	Model     string
-	Source    string // "video", or "transcript:<lang>"
+	Source    string // "video", "transcript:<lang>", or "transcript:<lang>:local"
 	Generated time.Time
 }
 
