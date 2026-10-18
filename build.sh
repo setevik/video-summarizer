@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build registry.tailb8bcc6.ts.net/video-summarizer:<version> for the NAS
-# (amd64) and, with --push, publish it to the homelab registry and move :latest
-# to it. The deployment tracks :latest, so a redeploy picks it up.
+# Build video-summarizer:<version> for the NAS (amd64) and, with --push,
+# publish it to GHCR and the homelab registry and move :latest to it. The
+# deployment pulls :latest from the homelab registry, so redeploy after a push.
 #
 #   ./build.sh [--push] [patch|minor|major|vX.Y.Z]
 #
@@ -44,21 +44,35 @@ if git rev-parse --quiet --verify "refs/tags/$version" >/dev/null; then
 	echo "build.sh: $version is already tagged" >&2
 	exit 1
 fi
-repo=registry.tailb8bcc6.ts.net/video-summarizer
-image=$repo:$version
-echo "building $image (latest tag: ${latest:-none})"
+# The deployment pulls from the homelab registry (tailnet only); GHCR is kept
+# as the public copy.
+repos=(ghcr.io/setevik/video-summarizer registry.tailb8bcc6.ts.net/video-summarizer)
+image=${repos[0]}:$version
+echo "building $version (latest tag: ${latest:-none})"
 
 go test ./...
-docker build --platform linux/amd64 -t "$image" .
+# Podman copies the base image's manifest annotations, including distroless's
+# org.opencontainers.image.source, and GHCR reads that ahead of the Dockerfile
+# LABEL when it links the package to a repository. Set ours explicitly.
+docker build --platform linux/amd64 \
+	--annotation org.opencontainers.image.source=https://github.com/setevik/video-summarizer \
+	-t "$image" .
+for repo in "${repos[@]:1}"; do
+	docker tag "$image" "$repo:$version"
+done
 if $push; then
-	docker push "$image"
+	for repo in "${repos[@]}"; do
+		docker push "$repo:$version"
+	done
 	git tag "$version"
 	git push --quiet origin "refs/tags/$version"
 	# :latest follows the highest version, so an explicit older one (a
 	# backport) does not move it back.
 	if [[ $(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1) == "$version" ]]; then
-		docker tag "$image" "$repo:latest"
-		docker push "$repo:latest"
+		for repo in "${repos[@]}"; do
+			docker tag "$image" "$repo:latest"
+			docker push "$repo:latest"
+		done
 	fi
-	echo "pushed $image; redeploy the stack to pick it up"
+	echo "pushed $version; redeploy the stack to pick it up"
 fi

@@ -178,12 +178,15 @@ touches the library.
 ./build.sh --push
 ```
 
-The script runs the tests, then builds `registry.tailb8bcc6.ts.net/video-summarizer:<version>`
-for amd64 and pushes it, moving `:latest` to it unless it is older than an
+The script runs the tests, then builds `video-summarizer:<version>` for amd64
+and pushes it to `ghcr.io/setevik/video-summarizer` and the homelab registry
+`registry.tailb8bcc6.ts.net/video-summarizer`, moving `:latest` to it unless it is older than an
 existing version. The version is the latest `vX.Y.Z` git tag with its
 patch bumped; pass `minor`, `major` or an explicit `vX.Y.Z` to override. A push
 also tags the commit with the version and pushes the tag, so it needs a clean
-working tree. The deployment tracks `:latest`; redeploy it to pick up a push.
+working tree. The deployment pulls `:latest` from the homelab registry; redeploy
+it to pick up a push.
 
-The image goes to the homelab's private registry (`svc:registry`, tailnet
-only). Pushing needs `docker login registry.tailb8bcc6.ts.net` once.
+Pushing needs `docker login ghcr.io` with a PAT that has `write:packages`, and
+`docker login registry.tailb8bcc6.ts.net` (tailnet only). The GHCR package is
+public: the code holds no secrets, and hosts can pull without credentials.
