@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build ghcr.io/setevik/video-summarizer:<version> for the NAS (amd64) and,
-# with --push, publish it and move :latest to it. The deployment pins the
-# version, so bump it there after a push.
+# Build registry.tailb8bcc6.ts.net/video-summarizer:<version> for the NAS
+# (amd64) and, with --push, publish it to the homelab registry and move :latest
+# to it. The deployment tracks :latest, so a redeploy picks it up.
 #
 #   ./build.sh [--push] [patch|minor|major|vX.Y.Z]
 #
@@ -44,17 +44,12 @@ if git rev-parse --quiet --verify "refs/tags/$version" >/dev/null; then
 	echo "build.sh: $version is already tagged" >&2
 	exit 1
 fi
-repo=ghcr.io/setevik/video-summarizer
+repo=registry.tailb8bcc6.ts.net/video-summarizer
 image=$repo:$version
 echo "building $image (latest tag: ${latest:-none})"
 
 go test ./...
-# Podman copies the base image's manifest annotations, including distroless's
-# org.opencontainers.image.source, and GHCR reads that ahead of the Dockerfile
-# LABEL when it links the package to a repository. Set ours explicitly.
-docker build --platform linux/amd64 \
-	--annotation org.opencontainers.image.source=https://github.com/setevik/video-summarizer \
-	-t "$image" .
+docker build --platform linux/amd64 -t "$image" .
 if $push; then
 	docker push "$image"
 	git tag "$version"
@@ -65,5 +60,5 @@ if $push; then
 		docker tag "$image" "$repo:latest"
 		docker push "$repo:latest"
 	fi
-	echo "pushed $image; pin $version in the deployment"
+	echo "pushed $image; redeploy the stack to pick it up"
 fi
