@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -70,8 +71,9 @@ func (j *jellyfin) do(ctx context.Context, method, path string, q url.Values, in
 // takes the overview from that rather than from the .nfo plot. A
 // replace-all refresh empties it outright. So the overview is written
 // through the API, as the web UI's metadata editor does, and locked so no
-// refresh or rescan takes it back. Only items whose overview differs are
-// written, so a run also repairs any that drifted.
+// refresh or rescan takes it back. Only items whose overview differs or is
+// unlocked are written, so a run also repairs any that drifted. An overview
+// can match without a lock when Jellyfin re-imports a moved file's .nfo.
 func (j *jellyfin) setOverviews(ctx context.Context, want map[string]string) (int, error) {
 	if len(want) == 0 {
 		return 0, nil
@@ -93,17 +95,20 @@ func (j *jellyfin) setOverviews(ctx context.Context, want map[string]string) (in
 			continue
 		}
 		var items struct {
-			Items []struct{ ID, Path, Overview string } `json:"Items"`
+			Items []struct {
+				ID, Path, Overview string
+				LockedFields       []string
+			} `json:"Items"`
 		}
 		q := url.Values{
 			"ParentId": {f.ItemID}, "Recursive": {"true"}, "IncludeItemTypes": {"Episode,Movie,MusicVideo,Video"},
-			"Fields": {"Path,Overview"}, "EnableImages": {"false"}, "EnableUserData": {"false"},
+			"Fields": {"Path,Overview,Settings"}, // Settings carries LockedFields "EnableImages": {"false"}, "EnableUserData": {"false"},
 		}
 		if err := j.do(ctx, "GET", "/Items", q, nil, &items); err != nil {
 			return 0, err
 		}
 		for _, it := range items.Items {
-			if plot, ok := want[it.Path]; ok && it.Overview != plot {
+			if plot, ok := want[it.Path]; ok && (it.Overview != plot || !slices.Contains(it.LockedFields, "Overview")) {
 				stale = append(stale, it.ID+"\x00"+plot)
 			}
 		}
