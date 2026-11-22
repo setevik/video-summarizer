@@ -622,14 +622,15 @@ func TestChaptersReachThePrompt(t *testing.T) {
 }
 
 // fakeJellyfin serves the endpoints setOverviews uses and records POSTed items.
-func fakeJellyfin(t *testing.T, root string, items []map[string]string) (*httptest.Server, map[string]map[string]any) {
+func fakeJellyfin(t *testing.T, root string, items []map[string]any) (*httptest.Server, map[string]map[string]any) {
 	posted := map[string]map[string]any{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == "GET" && r.URL.Path == "/Library/VirtualFolders":
 			json.NewEncoder(w).Encode([]map[string]any{{"ItemId": "lib", "Locations": []string{root}}})
 		case r.Method == "GET" && r.URL.Path == "/Items":
-			if r.URL.Query().Get("ParentId") != "lib" || !strings.Contains(r.URL.Query().Get("Fields"), "Overview") {
+			if r.URL.Query().Get("ParentId") != "lib" || !strings.Contains(r.URL.Query().Get("Fields"), "Overview") ||
+				!strings.Contains(r.URL.Query().Get("Fields"), "Settings") {
 				t.Errorf("items query %v", r.URL.Query())
 			}
 			// Stage recordings are a Movies library.
@@ -659,14 +660,15 @@ func fakeJellyfin(t *testing.T, root string, items []map[string]string) (*httpte
 
 func TestSetOverviewsWritesStaleAndLocks(t *testing.T) {
 	root := "/lib"
-	srv, posted := fakeJellyfin(t, root, []map[string]string{
+	srv, posted := fakeJellyfin(t, root, []map[string]any{
 		{"Id": "a", "Path": "/lib/a.mp4", "Overview": "old"},
-		{"Id": "b", "Path": "/lib/b.mp4", "Overview": "B plot"},
+		{"Id": "b", "Path": "/lib/b.mp4", "Overview": "B plot", "LockedFields": []string{"Overview"}},
 		{"Id": "c", "Path": "/lib/c.mp4", "Overview": "untouched"},
+		{"Id": "d", "Path": "/lib/d.mp4", "Overview": "D plot"}, // matches, but unlocked
 	})
 	j := &jellyfin{base: srv.URL, key: "k", http: srv.Client()}
-	n, err := j.setOverviews(context.Background(), map[string]string{"/lib/a.mp4": "A plot", "/lib/b.mp4": "B plot"})
-	if err != nil || n != 1 || len(posted) != 1 {
+	n, err := j.setOverviews(context.Background(), map[string]string{"/lib/a.mp4": "A plot", "/lib/b.mp4": "B plot", "/lib/d.mp4": "D plot"})
+	if err != nil || n != 2 || len(posted) != 2 || posted["d"]["Overview"] != "D plot" {
 		t.Fatalf("n %d err %v posted %v", n, err, posted)
 	}
 	a := posted["a"]
@@ -680,9 +682,9 @@ func TestRunSetsOverviewsForEverySummary(t *testing.T) {
 	root, vs := newLibrary(t, "aaaaaaaaaaa", "bbbbbbbbbbb")
 	// a was summarized on an earlier run; b is summarized now.
 	os.WriteFile(vs[0].SummaryPath(), []byte("---\nmodel: m\n---\n\nEarlier summary\n"), 0o644)
-	var items []map[string]string
+	var items []map[string]any
 	for i, v := range vs {
-		items = append(items, map[string]string{"Id": fmt.Sprint("item", i), "Path": v.Path, "Overview": "youtube description"})
+		items = append(items, map[string]any{"Id": fmt.Sprint("item", i), "Path": v.Path, "Overview": "youtube description"})
 	}
 	srv, posted := fakeJellyfin(t, root, items)
 	r := testRunner(root, &fake{})
@@ -697,5 +699,28 @@ func TestRunSetsOverviewsForEverySummary(t *testing.T) {
 		if !strings.HasSuffix(o, mdMarker) || !strings.Contains(o, detailsOpen) {
 			t.Errorf("%s: overview is not the .nfo plot:\n%s", id, o)
 		}
+	}
+}
+
+func TestStackedPartsShareOneOverview(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "Show (2020) - part")
+	var videos []Video
+	for _, n := range []string{"10", "02", "01"} {
+		p := base + n + ".mp4"
+		os.WriteFile(p, []byte("x"), 0o644)
+		videos = append(videos, Video{Path: p, Base: strings.TrimSuffix(p, ".mp4")})
+	}
+	os.WriteFile(base+"01.nfo", []byte("<movie><plot>Original text</plot></movie>"), 0o644)
+	os.WriteFile(base+"01.summary.md", []byte("---\nmodel: m\n---\n\nFirst opening.\n\n## Key points\n\n- **00:10** Hidden\n"), 0o644)
+	os.WriteFile(base+"10.summary.md", []byte("---\nmodel: m\n---\n\nTenth opening.\n"), 0o644)
+	r := testRunner(root, &fake{})
+	r.cfg.PlotFormat = "markdown"
+	overviews := map[string]string{videos[0].Path: "tenth alone", videos[2].Path: "first alone"}
+	r.combineParts(videos, overviews)
+	want := "**Part 1.** First opening.\n\n**Part 2.** No summary for this part.\n\n**Part 10.** Tenth opening.\n\n" +
+		detailsOpen + "Original text" + detailsEnd + "\n\n" + mdMarker
+	if len(overviews) != 1 || overviews[base+"01.mp4"] != want {
+		t.Errorf("overviews %q", overviews)
 	}
 }

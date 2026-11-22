@@ -147,6 +147,7 @@ func (r *runner) run(ctx context.Context) (runStats, error) {
 		}
 	}
 	if r.jf != nil && !r.cfg.DryRun {
+		r.combineParts(videos, overviews)
 		n, err := r.jf.setOverviews(ctx, overviews)
 		st.OverviewsSet = n
 		if err != nil {

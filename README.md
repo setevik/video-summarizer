@@ -16,7 +16,7 @@ For each video, newest first:
 2. **`.summary.md` exists:** re-inject it if the `.nfo` lacks it (ytdl-sub
    regenerated the file) or if it differs (the summary was edited). No API call.
 3. Set each summarized video's Jellyfin overview to its `.nfo` plot, and lock
-   the field. Only overviews that differ are written, so a run also repairs
+   the field. Only overviews that differ or are unlocked are written, so a run also repairs
    any that drifted.
 
 - **`.summary.md` is the source of truth.** Hand edits reach the `.nfo` on the
@@ -152,6 +152,9 @@ for Vertex: the Gemini API backend requires a key.
   from that, not from the `.nfo` plot, and a replace-all refresh empties it.
   So the job writes the overview as the web UI's metadata editor does, and
   locks it, which keeps it through any refresh or rescan.
+- A recording in `<name> - partNN` files is one stacked Jellyfin item. Its
+  overview lists each part's opening paragraph, and names any part with no
+  summary. No model call is made for it.
 - A locked overview stays as the job set it. To give one back to Jellyfin,
   delete the video's `.summary.md` and unlock **Overview** in the item's
   metadata editor.

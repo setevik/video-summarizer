@@ -59,20 +59,7 @@ func withPlot(doc, summary, format string) (string, error) {
 			return "", err
 		}
 	}
-	original := originalPlot(current)
-	var plot string
-	if format == "markdown" {
-		plot = summary
-		if original != "" {
-			plot += "\n\n" + detailsOpen + htmlLines(original) + detailsEnd
-		}
-		plot += "\n\n" + mdMarker
-	} else {
-		plot = summary + "\n\n" + plotMarker
-		if original != "" {
-			plot += "\n" + original
-		}
-	}
+	plot := composePlot(summary, originalPlot(current), format)
 	elem := "<plot>" + escapeText(plot) + "</plot>"
 	if ok {
 		return doc[:start] + elem + doc[end:], nil
@@ -83,6 +70,22 @@ func withPlot(doc, summary, format string) (string, error) {
 		return "", fmt.Errorf("no root element")
 	}
 	return doc[:i] + "  " + elem + "\n" + doc[i:], nil
+}
+
+// composePlot lays out a summary above the original plot.
+func composePlot(summary, original, format string) string {
+	if format == "markdown" {
+		plot := summary
+		if original != "" {
+			plot += "\n\n" + detailsOpen + htmlLines(original) + detailsEnd
+		}
+		return plot + "\n\n" + mdMarker
+	}
+	plot := summary + "\n\n" + plotMarker
+	if original != "" {
+		plot += "\n" + original
+	}
+	return plot
 }
 
 // originalPlot recovers ytdl-sub's plot from a plot in either layout, or
