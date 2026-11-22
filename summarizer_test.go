@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -630,6 +631,10 @@ func fakeJellyfin(t *testing.T, root string, items []map[string]string) (*httpte
 		case r.Method == "GET" && r.URL.Path == "/Items":
 			if r.URL.Query().Get("ParentId") != "lib" || !strings.Contains(r.URL.Query().Get("Fields"), "Overview") {
 				t.Errorf("items query %v", r.URL.Query())
+			}
+			// Stage recordings are a Movies library.
+			if types := strings.Split(r.URL.Query().Get("IncludeItemTypes"), ","); !slices.Contains(types, "Movie") {
+				t.Errorf("item types %v leave out movies", types)
 			}
 			json.NewEncoder(w).Encode(map[string]any{"Items": items})
 		case r.Method == "GET" && r.URL.Path == "/Users":
