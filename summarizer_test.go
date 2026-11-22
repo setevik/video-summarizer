@@ -630,7 +630,8 @@ func fakeJellyfin(t *testing.T, root string, items []map[string]any) (*httptest.
 			json.NewEncoder(w).Encode([]map[string]any{{"ItemId": "lib", "Locations": []string{root}}})
 		case r.Method == "GET" && r.URL.Path == "/Items":
 			if r.URL.Query().Get("ParentId") != "lib" || !strings.Contains(r.URL.Query().Get("Fields"), "Overview") ||
-				!strings.Contains(r.URL.Query().Get("Fields"), "Settings") {
+				!strings.Contains(r.URL.Query().Get("Fields"), "Settings") ||
+				r.URL.Query().Get("CollapseBoxSetItems") != "false" {
 				t.Errorf("items query %v", r.URL.Query())
 			}
 			// Stage recordings are a Movies library.
