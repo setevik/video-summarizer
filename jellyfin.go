@@ -103,6 +103,9 @@ func (j *jellyfin) setOverviews(ctx context.Context, want map[string]string) (in
 		q := url.Values{
 			"ParentId": {f.ItemID}, "Recursive": {"true"}, "IncludeItemTypes": {"Episode,Movie,MusicVideo,Video"},
 			"Fields": {"Path,Overview,Settings"}, // Settings carries LockedFields "EnableImages": {"false"}, "EnableUserData": {"false"},
+			// Without a user, Jellyfin otherwise returns a collection in place
+			// of the movies in it.
+			"CollapseBoxSetItems": {"false"},
 		}
 		if err := j.do(ctx, "GET", "/Items", q, nil, &items); err != nil {
 			return 0, err
