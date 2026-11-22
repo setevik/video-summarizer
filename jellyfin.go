@@ -96,7 +96,7 @@ func (j *jellyfin) setOverviews(ctx context.Context, want map[string]string) (in
 			Items []struct{ ID, Path, Overview string } `json:"Items"`
 		}
 		q := url.Values{
-			"ParentId": {f.ItemID}, "Recursive": {"true"}, "IncludeItemTypes": {"Episode,MusicVideo,Video"},
+			"ParentId": {f.ItemID}, "Recursive": {"true"}, "IncludeItemTypes": {"Episode,Movie,MusicVideo,Video"},
 			"Fields": {"Path,Overview"}, "EnableImages": {"false"}, "EnableUserData": {"false"},
 		}
 		if err := j.do(ctx, "GET", "/Items", q, nil, &items); err != nil {
