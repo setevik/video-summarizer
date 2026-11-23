@@ -153,7 +153,8 @@ for Vertex: the Gemini API backend requires a key.
   So the job writes the overview as the web UI's metadata editor does, and
   locks it, which keeps it through any refresh or rescan.
 - A recording in `<name> - partNN` files is one stacked Jellyfin item. Its
-  overview lists each part's opening paragraph, and names any part with no
+  overview lists each part's opening paragraph under the act and part its
+  title names, and names any part with no
   summary. No model call is made for it.
 - A locked overview stays as the job set it. To give one back to Jellyfin,
   delete the video's `.summary.md` and unlock **Overview** in the item's
