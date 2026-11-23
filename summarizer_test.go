@@ -715,11 +715,14 @@ func TestStackedPartsShareOneOverview(t *testing.T) {
 	os.WriteFile(base+"01.nfo", []byte("<movie><plot>Original text</plot></movie>"), 0o644)
 	os.WriteFile(base+"01.summary.md", []byte("---\nmodel: m\n---\n\nFirst opening.\n\n## Key points\n\n- **00:10** Hidden\n"), 0o644)
 	os.WriteFile(base+"10.summary.md", []byte("---\nmodel: m\n---\n\nTenth opening.\n"), 0o644)
+	os.WriteFile(base+"01.info.json", []byte(`{"title":"Show Act 1 Part 3"}`), 0o644)
+	os.WriteFile(base+"02.info.json", []byte(`{"title":"Show Complete - Act Two"}`), 0o644)
+	os.WriteFile(base+"10.info.json", []byte(`{"title":"The Album"}`), 0o644)
 	r := testRunner(root, &fake{})
 	r.cfg.PlotFormat = "markdown"
 	overviews := map[string]string{videos[0].Path: "tenth alone", videos[2].Path: "first alone"}
 	r.combineParts(videos, overviews)
-	want := "**Part 1.** First opening.\n\n**Part 2.** No summary for this part.\n\n**Part 10.** Tenth opening.\n\n" +
+	want := "**Act 1 Part 3.** First opening.\n\n**Act Two.** No summary for this part.\n\n**The Album.** Tenth opening.\n\n" +
 		detailsOpen + "Original text" + detailsEnd + "\n\n" + mdMarker
 	if len(overviews) != 1 || overviews[base+"01.mp4"] != want {
 		t.Errorf("overviews %q", overviews)

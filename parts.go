@@ -15,6 +15,9 @@ import (
 // Jellyfin, whose path is the first part's.
 var partName = regexp.MustCompile(`^(.*) - part(\d+)$`)
 
+// The act and part a recording's video title names, e.g. "Act 1 Part 2".
+var actInTitle = regexp.MustCompile(`(?i)\bAct\s+(?:\d+|One|Two|Three)\b(?:\W*Part\s*\d+\b)?`)
+
 type videoPart struct {
 	number int
 	video  Video
@@ -79,9 +82,9 @@ func (r *runner) partsPlot(parts []videoPart) (string, error) {
 			return "", err
 		}
 		if r.cfg.PlotFormat == "markdown" {
-			lines = append(lines, fmt.Sprintf("**Part %d.** %s", p.number, text))
+			lines = append(lines, fmt.Sprintf("**%s.** %s", partLabel(p), text))
 		} else {
-			lines = append(lines, fmt.Sprintf("Part %d: %s", p.number, text))
+			lines = append(lines, fmt.Sprintf("%s: %s", partLabel(p), text))
 		}
 	}
 	if !found {
@@ -92,6 +95,19 @@ func (r *runner) partsPlot(parts []videoPart) (string, error) {
 		return "", err
 	}
 	return composePlot(strings.Join(lines, "\n\n"), originalPlot(current), r.cfg.PlotFormat), nil
+}
+
+// partLabel names a part as its video title does. File numbers are playlist
+// positions, which can skip ads, so they are only the last resort.
+func partLabel(p videoPart) string {
+	m, err := loadMeta(p.video)
+	if err != nil || !m.HasInfoJSON || strings.TrimSpace(m.Title) == "" {
+		return fmt.Sprintf("Part %d", p.number)
+	}
+	if act := actInTitle.FindString(m.Title); act != "" {
+		return strings.Join(strings.Fields(act), " ")
+	}
+	return strings.TrimSpace(m.Title)
 }
 
 func (r *runner) openingParagraph(md string) string {
